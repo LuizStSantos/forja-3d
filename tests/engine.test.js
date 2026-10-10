@@ -94,6 +94,24 @@ check('round', 'echo(round(2.5), round(-2.5), floor(-1.5));', r => eq(echo(r), [
 check('stl export', 'cube(10); translate([5,0,0]) cube(10);', r => { const b = E.toSTL(r.objects); if (!b || b.byteLength < 84+12*50) throw new Error('stl pequeno'); });
 check('svg export', 'square(10); circle(3);', r => { const s = E.toSVG(r.objects); if (!s || !s.includes('<path')) throw new Error('svg'); });
 
+// fontes e bibliotecas
+const fsx = require('fs');
+const fb = (f) => { const b = fsx.readFileSync(require.resolve('@fontsource/roboto/files/' + f)); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); };
+if (!E.setFont('Roboto', 'regular', fb('roboto-latin-400-normal.woff'))) throw new Error('fonte não carregou');
+E.setFont('Roboto', 'bold', fb('roboto-latin-700-normal.woff'));
+const runLibs = (src, libs) => E.run(src, { libs });
+check('font por nome', 'linear_extrude(2) text("Hg", size=10, font="Roboto");', r => { if (r.warnings.length) throw new Error(r.warnings[0].msg); const b = E.bounds(r.objects); if (b[1][1] < 9.5 || b[1][1] > 10.6) throw new Error('altura ' + b[1][1]); });
+check('font negrito pesa mais', 'linear_extrude(1) text("H", size=10, font="Roboto:style=Bold");', r => { const vb = E.volume(r.objects); const n = E.run('linear_extrude(1) text("H", size=10, font="Roboto");'); if (!(vb > E.volume(n.objects))) throw new Error('negrito não é maior'); });
+check('font ausente avisa', 'linear_extrude(1) text("X", font="NaoExiste");', r => { eq(r.fontsWanted, ['NaoExiste']); if (!r.warnings.length) throw new Error('sem aviso'); });
+{
+  const r = runLibs('include <m.scad>; bloco(10); echo(K, dobro(2));', { 'm.scad': 'K=5; module bloco(t){ cube(t); } function dobro(x)=x*2;' });
+  if (r.error || E.volume(r.objects) !== 1000 || r.echoes[0].msg !== 'ECHO: 5, 4') { fails++; console.log('FAIL include'); } else console.log('ok   include');
+  const u = runLibs('use <m.scad>; bloco(10); echo(K, dobro(2));', { 'm.scad': 'K=5; module bloco(t){ cube(t*K/5); } function dobro(x)=x*K;' });
+  if (u.error || E.volume(u.objects) !== 1000 || u.echoes[0].msg !== 'ECHO: undef, 10') { fails++; console.log('FAIL use', u.echoes.map(e => e.msg)); } else console.log('ok   use');
+  const c = runLibs('include <a.scad>; cube(1);', { 'a.scad': 'include <a.scad>;' });
+  if (c.error || !c.warnings.length) { fails++; console.log('FAIL ciclo'); } else console.log('ok   ciclo de include');
+}
+check('recursão final longa', 'function f(n,a=0)= n==0?a:f(n-1,a+1); echo(f(2500));', r => eq(echo(r), ['ECHO: 2500']));
 
 console.log(fails ? `\n${fails} FALHAS` : '\nTODOS OK');
 if (fails) process.exit(1);

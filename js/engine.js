@@ -1,12 +1,74 @@
 /* Forja 3D — motor compatível com a linguagem OpenSCAD.
    3D: Manifold (o mesmo motor do OpenSCAD atual). 2D: Clipper (o mesmo do OpenSCAD). Texto: fonte de traço do JSCAD. */
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('@jscad/modeling'), require('clipper-lib'));
-  else root.ForjaEngine = factory(root.jscadModeling, root.ClipperLib);
-})(typeof self !== 'undefined' ? self : this, function (J, CL) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('@jscad/modeling'), require('clipper-lib'), require('opentype.js'));
+  else root.ForjaEngine = factory(root.jscadModeling, root.ClipperLib, root.opentype);
+})(typeof self !== 'undefined' ? self : this, function (J, CL, OT) {
   'use strict';
 
   const DEG = Math.PI / 180;
+
+  // ───────────────────────────── Fontes (opentype.js) ─────────────────────────────
+  const FONTS = new Map(); // 'familia|estilo' -> fonte
+  function normStyle(s) {
+    s = String(s || 'regular').toLowerCase();
+    const b = /bold|negrito|700|800|900/.test(s), i = /italic|oblique|italico|itálico/.test(s);
+    return b && i ? 'bold italic' : b ? 'bold' : i ? 'italic' : 'regular';
+  }
+  function parseFontSpec(spec) {
+    const parts = String(spec).split(':');
+    let st = 'regular';
+    for (const p of parts.slice(1)) { const m = /^\s*style\s*=\s*(.*)$/i.exec(p); if (m) st = m[1]; }
+    return { fam: parts[0].trim().toLowerCase(), st: normStyle(st) };
+  }
+  // registra uma fonte (ArrayBuffer .ttf/.otf/.woff) sob o nome e estilo dados
+  function setFont(family, style, data) {
+    if (!OT) return false;
+    const key = String(family).trim().toLowerCase() + '|' + normStyle(style);
+    if (FONTS.has(key)) return true;
+    try { FONTS.set(key, OT.parse(data)); return true; } catch (e) { return false; }
+  }
+  const hasFont = (spec) => { const f = parseFontSpec(spec); return FONTS.has(f.fam + '|' + f.st); };
+  function findFont(spec) {
+    const f = parseFontSpec(spec);
+    return FONTS.get(f.fam + '|' + f.st) || FONTS.get(f.fam + '|regular') || null;
+  }
+  // contornos do texto com uma fonte de verdade: tamanho = altura das maiúsculas, como no OpenSCAD
+  function fontRings(font, str, size, spacing, seg) {
+    const upm = font.unitsPerEm || 1000;
+    const os2 = font.tables && font.tables.os2;
+    const cap = (os2 && os2.sCapHeight > 0 ? os2.sCapHeight : upm * 0.7);
+    const k = size / cap;
+    const lineH = size * 1.45;
+    const rings = [];
+    str.split('\n').forEach((ln, li) => {
+      const glyphs = font.stringToGlyphs(ln);
+      let x = 0;
+      glyphs.forEach((g, i) => {
+        const cmds = g.getPath(0, 0, upm).commands;
+        let ring = null, cx = 0, cy = 0;
+        const X = (u) => (x + u) * k, Y = (v) => -v * k - li * lineH;
+        const push = (u, v) => ring.push([X(u), Y(v)]);
+        const close = () => { if (ring && ring.length >= 3) rings.push(ring); ring = null; };
+        for (const c of cmds) {
+          if (c.type === 'M') { close(); ring = []; cx = c.x; cy = c.y; push(cx, cy); }
+          else if (c.type === 'L') { cx = c.x; cy = c.y; push(cx, cy); }
+          else if (c.type === 'Q') {
+            for (let n = 1; n <= seg; n++) { const t = n / seg, a = (1 - t) * (1 - t), b = 2 * (1 - t) * t, d = t * t; push(a * cx + b * c.x1 + d * c.x, a * cy + b * c.y1 + d * c.y); }
+            cx = c.x; cy = c.y;
+          } else if (c.type === 'C') {
+            for (let n = 1; n <= seg; n++) { const t = n / seg, u = 1 - t; push(u * u * u * cx + 3 * u * u * t * c.x1 + 3 * u * t * t * c.x2 + t * t * t * c.x, u * u * u * cy + 3 * u * u * t * c.y1 + 3 * u * t * t * c.y2 + t * t * t * c.y); }
+            cx = c.x; cy = c.y;
+          } else if (c.type === 'Z') close();
+        }
+        close();
+        let adv = (g.advanceWidth || 0) * spacing;
+        if (i + 1 < glyphs.length) { try { adv += font.getKerningValue(g, glyphs[i + 1]) * spacing; } catch (e) { /* sem kerning */ } }
+        x += adv;
+      });
+    });
+    return rings;
+  }
 
   // ───────────────────────────── 2D (Clipper, como no OpenSCAD) ─────────────────────────────
   // Formas 2D são listas de contornos fechados: externos no sentido anti-horário, furos no horário.
@@ -923,6 +985,10 @@
       this.start = Date.now();
       this.timeLimit = this.opts.timeLimit || 60000;
       this.warnSet = new Set();
+      this.fontsWanted = new Set();
+      this.libs = this.opts.libs || {};
+      this.libAst = new Map();
+      this.incStack = [];
     }
     warn(msg, line) {
       const key = msg + '@' + line;
@@ -1159,7 +1225,45 @@
     }
 
     // ── statements ──
+    libFor(path, line) {
+      const base = String(path).split(/[\\/]/).pop();
+      const key = Object.keys(this.libs).find((k) => k.toLowerCase() === base.toLowerCase() || k.toLowerCase() === (base + '.scad').toLowerCase());
+      if (!key) { this.warn(`Biblioteca '${base}' não encontrada. Crie ou importe na aba Biblioteca.`, line); return null; }
+      if (this.incStack.includes(key)) { this.warn(`Biblioteca '${base}' se inclui em círculo`, line); return null; }
+      let ast = this.libAst.get(key);
+      if (!ast) {
+        try { ast = parse(this.libs[key]); } catch (e) { throw new ScadError(`Erro na biblioteca ${key}: ${e.message}`, line); }
+        this.libAst.set(key, ast);
+      }
+      return { key, ast };
+    }
+    // troca cada include/use pelo conteúdo da biblioteca
+    expandIncludes(stmts, sc) {
+      const out = [];
+      for (const st of stmts) {
+        if (st.type !== 'include') { out.push(st); continue; }
+        const lib = this.libFor(st.path, st.line);
+        if (!lib) continue;
+        this.incStack.push(lib.key);
+        try {
+          if (st.kind === 'include') out.push(...this.expandIncludes(lib.ast.body, sc));
+          else {
+            // use: só módulos e funções, cada um enxergando as variáveis da própria biblioteca
+            const ls = new Scope(null, null);
+            const body = this.expandIncludes(lib.ast.body, ls);
+            for (const b of body) {
+              if (b.type === 'moddef') { const d = { params: b.params, body: b.body, scope: ls }; ls.defMod(b.name, d); sc.defMod(b.name, d); }
+              else if (b.type === 'fundef') { const d = { params: b.params, expr: b.expr, scope: ls }; ls.defFunc(b.name, d); sc.defFunc(b.name, d); }
+            }
+            for (const b of body) if (b.type === 'assign') ls.vars.set(b.name, this.ev(b.expr, ls));
+          }
+        } finally { this.incStack.pop(); }
+      }
+      return out;
+    }
+
     runBlock(stmts, sc) {
+      if (stmts.some((s) => s.type === 'include')) stmts = this.expandIncludes(stmts, sc);
       for (const st of stmts) {
         if (st.type === 'moddef') sc.defMod(st.name, { params: st.params, body: st.body, scope: sc });
         else if (st.type === 'fundef') sc.defFunc(st.name, { params: st.params, expr: st.expr, scope: sc });
@@ -1480,6 +1584,26 @@
       const halign = ctx.arg(['halign'], 'left'), valign = ctx.arg(['valign'], 'baseline');
       const spacing = num(ctx.arg(['spacing']), 1);
       if (t === undefined) return EMPTY();
+      const fontSpec = ctx.arg(['font']);
+      if (fontSpec !== undefined && OT) {
+        const font = findFont(fmt(fontSpec, false));
+        if (font) {
+          const str = fmt(t, false);
+          if (!str.trim()) return EMPTY();
+          const rings = fontRings(font, str, size, spacing, 8);
+          let g = rings.length ? P2.sanitize(rings, false) : [];
+          if (!g.length) return EMPTY();
+          const bb = P2.bounds(g);
+          let dx = 0, dy = 0;
+          if (halign === 'center') dx = -(bb[0][0] + bb[1][0]) / 2; else if (halign === 'right') dx = -bb[1][0];
+          if (valign === 'center') dy = -(bb[0][1] + bb[1][1]) / 2; else if (valign === 'top') dy = -bb[1][1]; else if (valign === 'bottom') dy = -bb[0][1];
+          if (dx || dy) g = P2.transform(g, Tm(dx, dy, 0));
+          return prim(ctx, g, 2);
+        }
+        const spec = fmt(fontSpec, false);
+        ctx.it.fontsWanted.add(spec);
+        ctx.it.warn(`Fonte '${spec}' não encontrada; usando a fonte simples. Escreva o nome de uma fonte do Google Fonts ou envie o arquivo na aba Biblioteca.`, ctx.line);
+      }
       t = fmt(t, false).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\x20-\x7e\n]/g, '?');
       const segs = J.text.vectorText({ height: size * 0.72, letterSpacing: spacing, input: t });
       const w = size * 0.11;
@@ -1861,7 +1985,7 @@
     } finally {
       ARENA = null;
     }
-    if (it) { result.echoes = it.echoes; result.warnings = it.warnings; }
+    if (it) { result.echoes = it.echoes; result.warnings = it.warnings; result.fontsWanted = [...it.fontsWanted]; }
     result.time = Date.now() - t0;
     return result;
   }
@@ -1981,7 +2105,7 @@
   }
 
   return {
-    run, parse, lex, extractParams, literalText, toTriangles, toSTL, toOBJ, toSVG, bounds, volume, fmt, setManifold,
+    run, parse, lex, setFont, hasFont, extractParams, literalText, toTriangles, toSTL, toOBJ, toSVG, bounds, volume, fmt, setManifold,
     get has3D() { return !!MF; },
     ALIASES, BUILTIN_MODS: Object.keys(BUILTIN_MODS), BUILTIN_FUNCS: Object.keys(BUILTIN_FUNCS), ScadError,
   };

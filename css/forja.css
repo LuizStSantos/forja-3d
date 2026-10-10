@@ -326,3 +326,26 @@ li.CodeMirror-hint-active b { color: var(--accent); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* aba Biblioteca */
+.lib { padding: 6px 16px 18px; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 4px 28px; }
+.lib section { min-width: 0; }
+.lib h3 { font: 600 12px var(--font-display); letter-spacing: .1em; text-transform: uppercase; color: var(--accent); margin: 14px 0 6px; }
+.lib p { margin: 0 0 8px; color: var(--ink-2); max-width: 62ch; }
+.lib code { font-family: var(--font-mono); font-size: 12.5px; background: var(--sheet-2); padding: 1px 4px; border-radius: 4px; }
+.lrow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 8px; }
+.lrow small { color: var(--ink-3); }
+.lrow input[type="text"], .lrow input:not([type]), .lrow input[list] { flex: 1 1 180px; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--rule); border-radius: 7px; background: var(--sheet); color: var(--ink); font: inherit; }
+.llist { list-style: none; margin: 0 0 8px; padding: 0; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; }
+.llist li { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--rule); background: var(--sheet); }
+.llist li:last-child { border-bottom: 0; }
+.llist li b { font-family: var(--font-mono); font-size: 13px; font-weight: 600; }
+.llist li span { color: var(--ink-3); font-size: 12.5px; flex: 1; }
+.lmini { border: 0; background: transparent; color: var(--accent); font: 500 12.5px var(--font-body); padding: 3px 6px; border-radius: 5px; }
+.lmini:hover { background: var(--sheet-2); }
+.lempty { color: var(--ink-3); }
+.ledit { border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; margin-top: 8px; }
+.lhead { display: flex; gap: 8px; align-items: center; padding: 6px 8px 6px 12px; background: var(--sheet-2); border-bottom: 1px solid var(--rule); }
+.lhead .lsp { flex: 1; }
+.lhead .btn { height: 30px; }
+.ledit textarea { display: block; width: 100%; box-sizing: border-box; min-height: 200px; resize: vertical; border: 0; padding: 10px 12px; background: var(--sheet); color: var(--ink); font: 13px/1.5 var(--font-mono); tab-size: 2; }

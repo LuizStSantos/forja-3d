@@ -119,12 +119,14 @@
         <div class="dtabs" role="tablist">
           <button role="tab" data-tab="params" aria-selected="true">Parâmetros <span class="badge" id="bParams">0</span></button>
           <button role="tab" data-tab="console" aria-selected="false">Console <span class="badge" id="bConsole">0</span></button>
+          <button role="tab" data-tab="lib" aria-selected="false">Biblioteca</button>
           <button role="tab" data-tab="help" aria-selected="false">Ajuda</button>
           <span class="spacer"></span>
           <button class="mini" id="btnResetParams" type="button" hidden>Restaurar valores</button>
         </div>
         <div class="dpanel" id="pParams"></div>
         <div class="dpanel" id="pConsole" hidden><div class="log" id="log"></div></div>
+        <div class="dpanel" id="pLib" hidden></div>
         <div class="dpanel" id="pHelp" hidden></div>
       </section>
     </section>
@@ -136,6 +138,7 @@
 <script src="vendor/OrbitControls.js"></script>
 <script src="vendor/jscad-modeling.min.js"></script>
 <script src="vendor/clipper.js"></script>
+<script src="vendor/opentype.min.js"></script>
 <script src="vendor/codemirror/codemirror.js"></script>
 <script src="vendor/codemirror/simple.js"></script>
 <script src="vendor/codemirror/matchbrackets.js"></script>

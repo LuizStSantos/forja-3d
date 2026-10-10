@@ -20,6 +20,8 @@ Você escreve a peça em código e vê o resultado em 3D na hora, sem instalar n
 - **Medidas**: dimensões em mm e volume (maciço).
 - **Erros em português**, com a linha marcada no editor.
 - **Exportação**: STL, OBJ, SVG (corte a laser), PNG e o próprio `.scad`. O STL sai sempre com a malha fechada (sem arestas não-manifold), pronto para o fatiador.
+- **Fontes pelo nome**: `text("Olá", font = "Pacifico")` usa qualquer fonte do Google Fonts, carregada na hora (negrito: `"Roboto:style=Bold"`). Também dá para enviar um arquivo `.ttf`, `.otf` ou `.woff` na aba **Biblioteca**.
+- **Bibliotecas `.scad`**: na aba **Biblioteca** você escreve, importa e exporta arquivos e usa com `include <nome.scad>` ou `use <nome.scad>`. Ficam guardadas no navegador.
 - **Atalhos em português** (opcionais): `cubo`, `esfera`, `cilindro`, `mover`, `girar`, `diferenca`, `uniao`… e cores como `"vermelho"`.
 - O rascunho fica salvo no seu navegador.
 
@@ -31,8 +33,8 @@ Funciona: `cube`, `sphere`, `cylinder`, `polyhedron`, `square`, `circle`, `polyg
 `projection`, módulos, funções, `children()`, `for`, `intersection_for`, `if`, `let`, `each`,
 listas `[for (...) ...]`, funções anônimas, `echo`, `assert`, `$fn`/`$fa`/`$fs` e os modificadores `# % * !`.
 
-Ainda não funciona: `include`/`use` de bibliotecas, `import()` de arquivos e `surface()`.
-O `text()` usa uma fonte de traço simples e remove acentos.
+Ainda não funciona: `import()` de arquivos e `surface()`. As bibliotecas do OpenSCAD (MCAD, BOSL2…) não vêm embutidas: importe o arquivo `.scad` delas na aba Biblioteca.
+Sem o parâmetro `font`, o `text()` usa uma fonte de traço simples que remove acentos; com `font` ele usa a fonte de verdade.
 
 ## Rodar no seu computador
 
@@ -67,6 +69,7 @@ Os testes conferem a linguagem, os volumes e se cada exemplo exporta um STL com 
 Bibliotecas usadas (em `vendor/`, todas de código aberto):
 [Manifold](https://github.com/elalish/manifold) (geometria 3D, o mesmo motor do OpenSCAD atual, Apache-2.0),
 [Clipper](http://www.angusj.com/clipper2/Docs/Overview.htm) (geometria 2D, a mesma usada pelo OpenSCAD, Boost),
-[JSCAD modeling](https://github.com/jscad/OpenJSCAD.org) (fonte do `text()`, MIT),
+[opentype.js](https://opentype.js.org) (leitura das fontes, MIT),
+[JSCAD modeling](https://github.com/jscad/OpenJSCAD.org) (fonte simples do `text()`, MIT),
 [three.js](https://threejs.org) (visualização, MIT) e
 [CodeMirror 5](https://codemirror.net/5/) (editor, MIT).

@@ -4,16 +4,18 @@
   function forjaHandler(E, timeLimit) {
     let last = null;
     // o resultado anterior guarda geometria na memória do WebAssembly: libera antes de calcular outro
-    function runCode(code) {
+    function runCode(code, libs) {
       if (last) { last.r.dispose(); last = null; }
-      const r = E.run(code, { timeLimit });
-      last = { code, r };
+      const r = E.run(code, { timeLimit, libs: libs || {} });
+      last = { code, lk: JSON.stringify(libs || {}), r };
       return r;
     }
+    function useFonts(list) { (list || []).forEach((f) => E.setFont(f.family, f.style, f.data)); }
     return function (m) {
       if (m.type === 'hello') return { reply: { type: 'hello' }, transfer: [] };
       if (m.type === 'run') {
-        const r = runCode(m.code);
+        useFonts(m.fonts);
+        const r = runCode(m.code, m.libs);
         const meshes = [], transfer = [];
         const add = (o, ghost) => {
           try { const pos = E.toTriangles(o, 1); meshes.push({ pos, color: o.color, line: o.line, dim: o.dim, ghost }); transfer.push(pos.buffer); } catch (e) { /* ignora */ }
@@ -26,13 +28,14 @@
           reply: {
             type: 'result', id: m.id, meshes, bounds, volume, count: r.objects.length,
             has2d: r.objects.some((o) => o.dim === 2), has3d: r.objects.some((o) => o.dim === 3),
-            echoes: r.echoes, warnings: r.warnings, error: r.error, time: r.time,
+            echoes: r.echoes, warnings: r.warnings, fontsWanted: r.fontsWanted || [], error: r.error, time: r.time,
           },
           transfer,
         };
       }
       if (m.type === 'export') {
-        const r = last && last.code === m.code ? last.r : runCode(m.code);
+        useFonts(m.fonts);
+        const r = last && last.code === m.code && last.lk === JSON.stringify(m.libs || {}) ? last.r : runCode(m.code, m.libs);
         const fail = (msg) => ({ reply: { type: 'export', id: m.id, error: msg }, transfer: [] });
         if (r.error) return fail(`O código tem um erro${r.error.line ? ' na linha ' + r.error.line : ''}. Corrija antes de exportar.`);
         if (m.format === 'stl' || m.format === 'obj') {

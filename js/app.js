@@ -618,6 +618,79 @@
     return { setMeshes, fit, resize, setEdges, setGrid, applyTheme, snapshot, get edges() { return edgesOn; }, get grid() { return gridOn; }, redraw() { needs = true; } };
   })();
 
+  // ───────── fontes e bibliotecas (recursos do usuário) ─────────
+  const res = {
+    libs: (() => { try { return JSON.parse(store.get('libs', '{}')) || {}; } catch (e) { return {}; } })(),
+    user: (() => { try { return JSON.parse(store.get('fonts', '[]')) || []; } catch (e) { return []; } })(), // {family, style, b64}
+    cache: new Map(),   // 'familia|estilo' -> { family, style, data }
+    tried: new Set(),   // fontes que já tentamos baixar
+    sent: new Set(),    // fontes que o motor atual já recebeu
+    parse(spec) {
+      const parts = String(spec).split(':');
+      let st = 'regular';
+      for (const p of parts.slice(1)) { const m = /^\s*style\s*=\s*(.*)$/i.exec(p); if (m) st = m[1]; }
+      const b = /bold|negrito|700|800|900/i.test(st), i = /italic|oblique|italico|itálico/i.test(st);
+      return { fam: parts[0].trim(), st: b && i ? 'bold italic' : b ? 'bold' : i ? 'italic' : 'regular' };
+    },
+    key(spec) { const f = this.parse(spec); return f.fam.toLowerCase() + '|' + f.st; },
+    scan(code) {
+      const out = new Set(), re = /\bfont\s*=\s*"([^"]+)"/g;
+      let m;
+      while ((m = re.exec(code))) out.add(m[1]);
+      return out;
+    },
+    saveLibs() { store.set('libs', JSON.stringify(this.libs)); },
+    saveUser() { try { localStorage.setItem('forja3d:fonts', JSON.stringify(this.user)); return true; } catch (e) { return false; } },
+    b64ToBuf(b64) { const bin = atob(b64); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u.buffer; },
+    bufToB64(buf) { const u = new Uint8Array(buf); let s = ''; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); },
+    loadUser() {
+      for (const f of this.user) {
+        try { this.cache.set(f.family.toLowerCase() + '|' + f.style, { family: f.family, style: f.style, data: this.b64ToBuf(f.b64) }); } catch (e) { /* fonte guardada corrompida */ }
+      }
+    },
+    async download(spec) {
+      const { fam, st } = this.parse(spec);
+      const id = fam.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      if (!id) return null;
+      const w = /bold/.test(st) ? 700 : 400, style = /italic/.test(st) ? 'italic' : 'normal';
+      const urls = [
+        `https://cdn.jsdelivr.net/fontsource/fonts/${id}@latest/latin-${w}-${style}.woff`,
+        `https://cdn.jsdelivr.net/npm/@fontsource/${id}/files/${id}-latin-${w}-${style}.woff`,
+      ];
+      for (const u of urls) {
+        try {
+          const r = await fetch(u);
+          if (!r.ok) continue;
+          const data = await r.arrayBuffer();
+          if (window.opentype) window.opentype.parse(data); // confere se é uma fonte válida
+          return { family: fam, style: st, data };
+        } catch (e) { /* tenta o próximo endereço */ }
+      }
+      return null;
+    },
+    missing(specs) { return [...specs].filter((sp) => !this.cache.has(this.key(sp)) && !this.tried.has(this.key(sp))); },
+    // baixa as fontes pedidas que ainda não temos; devolve true se chegou alguma
+    async ensure(specs) {
+      const todo = this.missing(specs);
+      if (!todo.length) return false;
+      let got = false;
+      await Promise.all(todo.map(async (sp) => {
+        const k = this.key(sp);
+        this.tried.add(k);
+        const f = await this.download(sp);
+        if (f) { this.cache.set(k, f); got = true; }
+      }));
+      return got;
+    },
+    // o que vai junto com cada pedido ao motor: bibliotecas e as fontes que ele ainda não recebeu
+    payload() {
+      const fonts = [];
+      for (const [k, f] of this.cache) if (!this.sent.has(k)) { fonts.push(f); this.sent.add(k); }
+      return { libs: this.libs, fonts };
+    },
+  };
+  res.loadUser();
+
   // ───────── execução em segundo plano ─────────
   function makeWorker() {
     return new Worker('js/worker.js');
@@ -627,6 +700,7 @@
     mode: 'starting', w: null, busy: false, queued: null, curId: 0, seq: 0, started: 0, exports: new Map(), local: null,
     init() { try { this.spawn(); } catch (e) { this.goLocal(); } },
     spawn() {
+      res.sent.clear();
       this.mode = 'starting';
       let w;
       try { w = makeWorker(); } catch (e) { this.goLocal(); return; }
@@ -656,6 +730,7 @@
     },
     // plano B: sem worker, o motor roda na própria página (a interface pode travar durante o cálculo)
     goLocal() {
+      res.sent.clear();
       this.w = null;
       this.mode = 'starting';
       import(new URL('vendor/manifold/manifold.js', document.baseURI).href)
@@ -673,6 +748,7 @@
         });
     },
     send(m) {
+      if (m.type === 'run' || m.type === 'export') Object.assign(m, res.payload());
       if (this.mode === 'worker') { this.w.postMessage(m); return; }
       setTimeout(() => {
         let o;
@@ -695,7 +771,10 @@
       this.started = performance.now();
       this.curId = ++this.seq;
       ui.renderStarted(this.mode === 'local');
-      this.send({ type: 'run', id: this.curId, code });
+      const id = this.curId;
+      const go = () => { if (this.curId === id && this.busy) this.send({ type: 'run', id, code }); };
+      const want = res.missing(res.scan(code));
+      if (want.length) res.ensure(want).then(go); else go();
     },
     onReply(m) {
       if (!m) return;
@@ -703,6 +782,8 @@
         if (m.id !== this.curId) return;
         this.busy = false;
         ui.renderDone(m);
+        const need = res.missing(m.fontsWanted || []);
+        if (need.length) res.ensure(need).then((got) => { if (got) requestRender(0); });
         this.pump();
       } else if (m.type === 'export') {
         const p = this.exports.get(m.id);
@@ -710,6 +791,7 @@
       }
     },
     restart() {
+      res.sent.clear();
       if (this.w) this.w.terminate();
       for (const p of this.exports.values()) p.reject(new Error('Exportação interrompida.'));
       this.exports.clear();
@@ -734,7 +816,9 @@
         const go = () => {
           if (this.mode === 'starting') return setTimeout(go, 120);
           if (this.mode === 'failed') { this.exports.delete(id); reject(new Error('O motor 3D não carregou.')); return; }
-          this.send({ type: 'export', id, format, code, name });
+          const want = res.missing(res.scan(code));
+          const fire = () => this.send({ type: 'export', id, format, code, name });
+          if (want.length) res.ensure(want).then(fire); else fire();
         };
         go();
       });
@@ -1063,10 +1147,128 @@ tampa = true;</pre></div>`;
     $('#pParams').hidden = t !== 'params';
     $('#pConsole').hidden = t !== 'console';
     $('#pHelp').hidden = t !== 'help';
+    $('#pLib').hidden = t !== 'lib';
     updateResetBtn();
     if (t === 'help' && !$('#pHelp').childElementCount) buildHelp();
+    if (t === 'lib') buildLib();
   }
   $$('.dtabs [data-tab]').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
+
+  // ───────── aba Biblioteca: fontes e arquivos .scad ─────────
+  const POPULAR_FONTS = ['Roboto', 'Open Sans', 'Lato', 'Montserrat', 'Poppins', 'Inter', 'Oswald', 'Raleway', 'Playfair Display', 'Merriweather', 'Bebas Neue', 'Anton', 'Pacifico', 'Lobster', 'Caveat', 'Permanent Marker', 'Righteous', 'Orbitron', 'Press Start 2P', 'Roboto Mono', 'Fira Code', 'Cinzel', 'Satisfy', 'Dancing Script'];
+  let editingLib = null;
+  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  function libFileName(n) { n = String(n || '').trim().replace(/[\\/:*?"<>|\s]+/g, '_'); if (!n) return ''; return /\.scad$/i.test(n) ? n : n + '.scad'; }
+  function changedLibs() { res.saveLibs(); buildLib(); requestRender(0); }
+
+  function buildLib() {
+    const names = Object.keys(res.libs).sort();
+    const ed = editingLib && res.libs[editingLib] !== undefined;
+    $('#pLib').innerHTML = `<div class="lib">
+<section>
+  <h3>Fontes</h3>
+  <p>Escreva o nome da fonte no <code>text()</code>: <code>text("Olá", font = "Pacifico")</code>. Qualquer fonte do Google Fonts funciona, carregada na hora. Para negrito ou itálico: <code>"Roboto:style=Bold"</code>.</p>
+  <div class="lrow">
+    <input id="fontName" list="fontList" placeholder="Nome da fonte, ex.: Pacifico" autocomplete="off" spellcheck="false">
+    <datalist id="fontList">${POPULAR_FONTS.map((f) => `<option value="${f}">`).join('')}</datalist>
+    <button type="button" class="btn" id="fontIns">Inserir no código</button>
+  </div>
+  <div class="lrow"><button type="button" class="btn" id="fontUp">Enviar arquivo de fonte…</button><small>.ttf, .otf ou .woff — fica guardado neste navegador</small>
+    <input type="file" id="fontFile" accept=".ttf,.otf,.woff" hidden></div>
+  ${res.user.length ? `<ul class="llist">${res.user.map((f, i) => `<li><b>${esc(f.family)}</b><span>${esc(f.style)}</span><button type="button" class="lmini" data-fdel="${i}">Remover</button></li>`).join('')}</ul>` : ''}
+</section>
+<section>
+  <h3>Bibliotecas (.scad)</h3>
+  <p>Escreva ou importe módulos e funções e use com <code>include &lt;nome.scad&gt;;</code> ou <code>use &lt;nome.scad&gt;;</code>. Dá para exportar de volta como arquivo .scad.</p>
+  <div class="lrow">
+    <input id="libName" placeholder="nome.scad" autocomplete="off" spellcheck="false">
+    <button type="button" class="btn" id="libNew">Nova</button>
+    <button type="button" class="btn" id="libCode">Salvar o código atual</button>
+    <button type="button" class="btn" id="libUp">Importar .scad…</button>
+    <input type="file" id="libFile" accept=".scad,.txt" multiple hidden>
+  </div>
+  ${names.length ? `<ul class="llist">${names.map((n) => `<li><b>${esc(n)}</b><span>${res.libs[n].split('\n').length} linhas</span>
+    <button type="button" class="lmini" data-linc="${esc(n)}">Inserir include</button>
+    <button type="button" class="lmini" data-ledit="${esc(n)}">Editar</button>
+    <button type="button" class="lmini" data-lexp="${esc(n)}">Exportar</button>
+    <button type="button" class="lmini" data-ldel="${esc(n)}">Remover</button></li>`).join('')}</ul>` : '<p class="lempty">Nenhuma biblioteca ainda.</p>'}
+  ${ed ? `<div class="ledit"><div class="lhead"><b>${esc(editingLib)}</b><span class="lsp"></span><button type="button" class="btn" id="lSave">Salvar</button><button type="button" class="btn" id="lClose">Fechar</button></div>
+    <textarea id="lText" spellcheck="false" wrap="off">${esc(res.libs[editingLib])}</textarea></div>` : ''}
+</section></div>`;
+    const P = $('#pLib');
+    $('#fontIns', P).addEventListener('click', () => {
+      const n = $('#fontName', P).value.trim();
+      if (!n) { toast('Escreva o nome de uma fonte', 'err'); return; }
+      if (isMobile()) setPane('code');
+      insertCode(`linear_extrude(3) text("Olá", size = 10, font = "${n.replace(/"/g, '')}");`);
+      afterTool();
+    });
+    $('#fontUp', P).addEventListener('click', () => $('#fontFile', P).click());
+    $('#fontFile', P).addEventListener('change', async (e) => {
+      const f = e.target.files[0]; e.target.value = '';
+      if (!f) return;
+      try {
+        const data = await f.arrayBuffer();
+        const font = window.opentype.parse(data);
+        const nm = (o) => (o && (o.en || Object.values(o)[0])) || '';
+        const family = nm(font.names.fontFamily) || f.name.replace(/\.[^.]+$/, '');
+        const sub = nm(font.names.fontSubfamily);
+        const style = res.parse(family + ':style=' + sub).st;
+        res.user = res.user.filter((x) => !(x.family.toLowerCase() === family.toLowerCase() && x.style === style));
+        res.user.push({ family, style, b64: res.bufToB64(data) });
+        res.cache.set(family.toLowerCase() + '|' + style, { family, style, data });
+        if (!res.saveUser()) toast('Fonte carregada, mas não coube no armazenamento do navegador: some ao recarregar', 'err');
+        else toast(`Fonte “${family}” pronta: font = "${family}"`);
+        buildLib(); requestRender(0);
+      } catch (er) { toast('Não consegui ler esse arquivo de fonte', 'err'); }
+    });
+    $$('[data-fdel]', P).forEach((b) => b.addEventListener('click', () => {
+      const f = res.user[+b.dataset.fdel];
+      res.user.splice(+b.dataset.fdel, 1);
+      res.cache.delete(f.family.toLowerCase() + '|' + f.style);
+      res.saveUser(); buildLib();
+    }));
+    const addLib = (name, text) => {
+      const n = libFileName(name);
+      if (!n) { toast('Dê um nome para a biblioteca', 'err'); return null; }
+      if (res.libs[n] !== undefined && text === undefined) { toast('Já existe uma biblioteca com esse nome', 'err'); return null; }
+      res.libs[n] = text !== undefined ? text : '// ' + n + '\nmodule exemplo(tamanho = 10) {\n  cube(tamanho);\n}\n';
+      return n;
+    };
+    $('#libNew', P).addEventListener('click', () => { const n = addLib($('#libName', P).value); if (n) { editingLib = n; changedLibs(); } });
+    $('#libCode', P).addEventListener('click', () => {
+      const n = addLib($('#libName', P).value || 'minha_biblioteca', cm.getValue());
+      if (n) { editingLib = n; changedLibs(); toast(`Código salvo como ${n}`); }
+    });
+    $('#libUp', P).addEventListener('click', () => $('#libFile', P).click());
+    $('#libFile', P).addEventListener('change', async (e) => {
+      const files = [...e.target.files]; e.target.value = '';
+      for (const f of files) addLib(f.name, await f.text());
+      changedLibs();
+    });
+    $$('[data-linc]', P).forEach((b) => b.addEventListener('click', () => {
+      if (isMobile()) setPane('code');
+      cm.replaceRange(`include <${b.dataset.linc}>;\n`, { line: 0, ch: 0 });
+      afterTool();
+    }));
+    $$('[data-ledit]', P).forEach((b) => b.addEventListener('click', () => { editingLib = b.dataset.ledit; buildLib(); }));
+    $$('[data-lexp]', P).forEach((b) => b.addEventListener('click', () => saveFile(b.dataset.lexp, new Blob([res.libs[b.dataset.lexp]], { type: 'text/plain;charset=utf-8' }))));
+    $$('[data-ldel]', P).forEach((b) => b.addEventListener('click', () => {
+      if (!confirm(`Remover a biblioteca ${b.dataset.ldel}?`)) return;
+      delete res.libs[b.dataset.ldel];
+      if (editingLib === b.dataset.ldel) editingLib = null;
+      changedLibs();
+    }));
+    if (ed) {
+      const ta = $('#lText', P);
+      $('#lSave', P).addEventListener('click', () => { res.libs[editingLib] = ta.value; res.saveLibs(); toast('Biblioteca salva'); requestRender(0); });
+      $('#lClose', P).addEventListener('click', () => { editingLib = null; buildLib(); });
+      ta.addEventListener('keydown', (e) => {
+        if (e.key === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $('#lSave', P).click(); }
+        if (e.key === 'Tab') { e.preventDefault(); const a = ta.selectionStart; ta.setRangeText('  ', a, ta.selectionEnd, 'end'); }
+      });
+    }
+  }
 
   function buildHelp() {
     const ins = (code, label) => `<button type="button" class="ins" data-ins="${code.replace(/"/g, '&quot;')}">${(label || code).replace(/</g, '&lt;')}</button>`;

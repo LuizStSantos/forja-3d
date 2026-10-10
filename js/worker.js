@@ -1,5 +1,5 @@
 /* Forja 3D — roda o motor fora da página para a interface não travar */
-importScripts('../vendor/jscad-modeling.min.js', '../vendor/clipper.js', 'engine.js', 'handler.js');
+importScripts('../vendor/jscad-modeling.min.js', '../vendor/clipper.js', '../vendor/opentype.min.js', 'engine.js', 'handler.js');
 
 // motor 3D (Manifold, WebAssembly)
 const ready = import(new URL('../vendor/manifold/manifold.js', self.location.href).href)
