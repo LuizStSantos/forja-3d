@@ -17,7 +17,7 @@ Você escreve a peça em código e vê o resultado em 3D na hora, sem instalar n
   tipo = "A";    // [A, B, C]
   ```
 - **Clique numa peça** no 3D para ir à linha que a criou.
-- **Medidas e massa**: dimensões em mm, volume e uma estimativa em gramas de PLA.
+- **Medidas**: dimensões em mm e volume (maciço).
 - **Erros em português**, com a linha marcada no editor.
 - **Exportação**: STL, OBJ, SVG (corte a laser), PNG e o próprio `.scad`. O STL sai sempre com a malha fechada (sem arestas não-manifold), pronto para o fatiador.
 - **Atalhos em português** (opcionais): `cubo`, `esfera`, `cilindro`, `mover`, `girar`, `diferenca`, `uniao`… e cores como `"vermelho"`.

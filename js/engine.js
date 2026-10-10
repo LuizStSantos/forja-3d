@@ -1113,9 +1113,33 @@
     callFn(params, body, defScope, args, callSc, line) {
       if (++this.depth > 3000) throw new ScadError('Recursão profunda demais', line);
       try {
-        const ns = new Scope(defScope, callSc);
+        let ns = new Scope(defScope, callSc);
         this.bindParams(params, args, callSc, ns, line);
-        return this.ev(body, ns);
+        // Chamada final (tail call): reaproveita o laço em vez de empilhar, como o OpenSCAD.
+        let node = body, sc = ns;
+        for (;;) {
+          if (node.type === 'tern') { node = truthy(this.ev(node.cond, sc)) ? node.a : node.b; continue; }
+          if (node.type === 'let') {
+            const s2 = new Scope(sc, sc);
+            for (const as of node.assigns) s2.vars.set(as.name, as.expr ? this.ev(as.expr, s2) : undefined);
+            sc = s2; node = node.body; continue;
+          }
+          if (node.type === 'call') {
+            let t = sc.findFunc(node.name), tp, tb, ts;
+            if (t) { tp = t.params; tb = t.expr; ts = t.scope; }
+            else {
+              const v = sc.get(node.name);
+              if (v !== NOTFOUND && isFn(v)) { tp = v.params; tb = v.body; ts = v.scope; }
+            }
+            if (tp) {
+              this.tick(node.line);
+              const n2 = new Scope(ts, sc);
+              this.bindParams(tp, node.args, sc, n2, node.line);
+              sc = n2; node = tb; continue;
+            }
+          }
+          return this.ev(node, sc);
+        }
       } finally { this.depth--; }
     }
 

@@ -820,8 +820,7 @@
     const mass = ro.querySelector('.mass');
     if (m.has3d && m.volume > 0) {
       const cm3 = m.volume / 1000;
-      const g = cm3 * 1.24;
-      mass.textContent = `${cm3 < 10 ? cm3.toFixed(2) : cm3.toFixed(1)} cm³ · ≈ ${g < 10 ? g.toFixed(1) : Math.round(g)} g de PLA maciço`;
+      mass.textContent = `${cm3 < 10 ? cm3.toFixed(2) : cm3.toFixed(1)} cm³ · maciço`;
       mass.hidden = false;
     } else if (m.has2d && !m.has3d) { mass.textContent = 'Formas 2D: exporte em SVG ou use linear_extrude()'; mass.hidden = false; }
     else mass.hidden = true;
