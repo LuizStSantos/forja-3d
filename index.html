@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Forja 3D</title>
+<meta name="description" content="CAD por código no navegador, compatível com OpenSCAD: visualização 3D ao vivo, parâmetros com controles deslizantes e exportação STL.">
+<meta name="theme-color" content="#1f6a55">
+<meta property="og:title" content="Forja 3D">
+<meta property="og:description" content="CAD por código no navegador, compatível com OpenSCAD.">
+<meta property="og:type" content="website">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="vendor/codemirror/codemirror.css">
+<link rel="stylesheet" href="css/forja.css">
+</head>
+<body>
+<div id="app">
+  <header class="top">
+    <div class="brand">
+      <svg viewBox="0 0 28 28" aria-hidden="true">
+        <path d="M14 3 24 8.6v10.8L14 25 4 19.4V8.6z" fill="var(--accent)"/>
+        <path d="M4 8.6 14 14.2 24 8.6 14 3z" fill="var(--model)"/>
+        <path d="M14 14.2V25" stroke="var(--paper)" stroke-width="1.2" opacity=".5"/>
+      </svg>
+      <div><b>Forja 3D</b><small>CAD por código · compatível com OpenSCAD</small></div>
+    </div>
+    <div class="proj" title="Nome do projeto (usado nos arquivos exportados)">
+      <input id="projName" type="text" value="caixa" aria-label="Nome do projeto" spellcheck="false" autocomplete="off">
+      <span>.scad</span>
+    </div>
+    <div class="menu-wrap">
+      <button class="btn" id="btnExamples" aria-haspopup="true" aria-expanded="false">
+        <svg class="i" viewBox="0 0 20 20"><path d="M3 4.5h5.5a2 2 0 0 1 2 2V17a1.5 1.5 0 0 0-1.5-1.5H3zM17 4.5h-5.5a2 2 0 0 0-2 2V17a1.5 1.5 0 0 1 1.5-1.5H17z"/></svg>
+        <span class="lbl lbl-opt">Exemplos</span>
+        <svg class="i chev" viewBox="0 0 20 20"><path d="m6 8 4 4 4-4"/></svg>
+      </button>
+      <div class="menu" id="menuExamples" hidden></div>
+    </div>
+    <div class="menu-wrap">
+      <button class="btn" id="btnFile" aria-haspopup="true" aria-expanded="false">
+        <svg class="i" viewBox="0 0 20 20"><path d="M2.5 6V15a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5V7.5A1.5 1.5 0 0 0 16 6h-6L8.3 4H4A1.5 1.5 0 0 0 2.5 5.5z"/></svg>
+        <span class="lbl lbl-opt">Arquivo</span>
+        <svg class="i chev" viewBox="0 0 20 20"><path d="m6 8 4 4 4-4"/></svg>
+      </button>
+      <div class="menu" id="menuFile" hidden>
+        <button data-act="new"><svg class="i" viewBox="0 0 20 20"><path d="M5 2.5h6.5L15 6v11.5H5zM11 2.5V6.5h4M10 9.5v5M7.5 12h5"/></svg><b>Novo</b><small>Começa do zero (Ctrl+Z desfaz)</small></button>
+        <button data-act="open"><svg class="i" viewBox="0 0 20 20"><path d="M2.5 6V15a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5V7.5A1.5 1.5 0 0 0 16 6h-6L8.3 4H4A1.5 1.5 0 0 0 2.5 5.5z"/></svg><b>Abrir arquivo .scad…</b><small>Ou arraste o arquivo para o editor</small></button>
+        <hr>
+        <button data-act="copy"><svg class="i" viewBox="0 0 20 20"><rect x="7" y="7" width="10" height="10" rx="1.5"/><path d="M13 7V4.5A1.5 1.5 0 0 0 11.5 3h-7A1.5 1.5 0 0 0 3 4.5v7A1.5 1.5 0 0 0 4.5 13H7"/></svg><b>Copiar código</b><small>Para colar no OpenSCAD ou em outro lugar</small></button>
+      </div>
+      <input type="file" id="fileInput" accept=".scad,.txt,text/plain" hidden>
+    </div>
+    <div class="spacer"></div>
+    <button class="status" id="status" data-s="ok" type="button" aria-live="polite"><i></i><span>Pronto</span></button>
+    <label class="auto" title="Renderizar automaticamente enquanto você digita">
+      <span class="switch"><input type="checkbox" id="autoRender" checked><span></span></span><span class="lbl-auto">Auto</span>
+    </label>
+    <button class="btn primary" id="btnRender" title="Renderizar (Ctrl+Enter)">
+      <svg class="i" viewBox="0 0 20 20"><path d="M6 4.5v11l9-5.5z" fill="currentColor" stroke="none"/></svg>
+      <span class="lbl">Renderizar</span> <kbd class="lbl lbl-wide">Ctrl ↵</kbd>
+    </button>
+    <div class="menu-wrap">
+      <button class="btn" id="btnExport" aria-haspopup="true" aria-expanded="false">
+        <svg class="i" viewBox="0 0 20 20"><path d="M10 3v9.5M6 8.5l4 4 4-4M3.5 13.5v2A1.5 1.5 0 0 0 5 17h10a1.5 1.5 0 0 0 1.5-1.5v-2"/></svg>
+        <span class="lbl lbl-opt">Exportar</span>
+        <svg class="i chev" viewBox="0 0 20 20"><path d="m6 8 4 4 4-4"/></svg>
+      </button>
+      <div class="menu right" id="menuExport" hidden>
+        <div class="lbl">Para impressão 3D</div>
+        <button data-exp="stl"><svg class="i" viewBox="0 0 20 20"><path d="M10 2.5 17 6.5v7L10 17.5 3 13.5v-7z M3 6.5l7 4 7-4 M10 10.5v7"/></svg><b>STL</b><small>Para o fatiador (Cura, PrusaSlicer, Bambu Studio)</small></button>
+        <button data-exp="obj"><svg class="i" viewBox="0 0 20 20"><path d="M10 2.5 17 6.5v7L10 17.5 3 13.5v-7z"/></svg><b>OBJ</b><small>Para Blender e outros programas 3D</small></button>
+        <div class="lbl">Outros</div>
+        <button data-exp="svg"><svg class="i" viewBox="0 0 20 20"><path d="M10 3 17 8.5 14.3 16.5H5.7L3 8.5z"/></svg><b>SVG</b><small>Formas 2D para corte a laser e CNC</small></button>
+        <button data-exp="png"><svg class="i" viewBox="0 0 20 20"><rect x="2.5" y="4" width="15" height="12" rx="1.5"/><circle cx="7" cy="8.5" r="1.5"/><path d="m3 15 5-4.5 3.5 3 2.5-2 3.5 3"/></svg><b>Imagem PNG</b><small>Captura da vista 3D atual</small></button>
+        <button data-exp="scad"><svg class="i" viewBox="0 0 20 20"><path d="M7 6 3 10l4 4M13 6l4 4-4 4"/></svg><b>Código .scad</b><small>Abre no OpenSCAD original</small></button>
+      </div>
+    </div>
+  </header>
+
+  <nav class="mtabs" role="tablist" aria-label="Seções">
+    <button role="tab" data-pane="code" aria-selected="true">Código</button>
+    <button role="tab" data-pane="view" aria-selected="false">3D</button>
+    <button role="tab" data-pane="panel" aria-selected="false">Painel</button>
+  </nav>
+
+  <main class="bench" id="bench">
+    <section class="left" aria-label="Código">
+      <div class="tray">
+        <div class="tray-tabs" role="tablist" id="trayTabs"></div>
+        <div class="chips" id="chips"></div>
+      </div>
+      <div class="editor" id="editor"></div>
+      <div class="edfoot"><span id="cursorPos">Linha 1, coluna 1</span><span>Ctrl+Espaço sugere · Ctrl+/ comenta</span></div>
+    </section>
+    <div class="split v" id="splitV" role="separator" aria-orientation="vertical" aria-label="Redimensionar painéis"></div>
+    <section class="right">
+      <div class="mat" id="mat" aria-label="Visualização 3D">
+        <canvas id="view"></canvas>
+        <div class="readout" id="readout" hidden><div class="dims"></div><div class="mass"></div></div>
+        <div class="viewtools">
+          <button class="vt" data-view="fit" title="Enquadrar a peça"><svg class="i" viewBox="0 0 20 20"><path d="M3 7V3h4M13 3h4v4M17 13v4h-4M7 17H3v-4"/></svg></button>
+          <button class="vt" data-view="iso" title="Vista isométrica">Iso</button>
+          <button class="vt" data-view="top" title="Vista de cima">Topo</button>
+          <button class="vt" data-view="front" title="Vista de frente">Frente</button>
+          <button class="vt" data-view="right" title="Vista da direita">Lado</button>
+          <button class="vt" data-toggle="edges" aria-pressed="false" title="Mostrar arestas"><svg class="i" viewBox="0 0 20 20"><path d="M10 2.5 17 6.5v7L10 17.5 3 13.5v-7z M3 6.5l7 4 7-4 M10 10.5v7"/></svg></button>
+          <button class="vt" data-toggle="grid" aria-pressed="true" title="Mostrar grade e eixos"><svg class="i" viewBox="0 0 20 20"><path d="M3 7h14M3 13h14M7 3v14M13 3v14"/></svg></button>
+        </div>
+        <div class="empty" id="empty" hidden><div><b>A bancada está vazia</b>Escreva <code>cube(10);</code> no editor ou escolha uma forma na bandeja.</div></div>
+        <div class="pick-tip" id="pickTip" hidden></div>
+        <div class="busy" id="busy" hidden><span>Renderizando…</span><button id="btnStop" type="button">Parar</button></div>
+        <button class="errbar" id="errbar" type="button" hidden><b></b><span></span></button>
+      </div>
+      <div class="split h" id="splitH" role="separator" aria-orientation="horizontal" aria-label="Redimensionar gaveta"></div>
+      <section class="drawer" aria-label="Painel">
+        <div class="dtabs" role="tablist">
+          <button role="tab" data-tab="params" aria-selected="true">Parâmetros <span class="badge" id="bParams">0</span></button>
+          <button role="tab" data-tab="console" aria-selected="false">Console <span class="badge" id="bConsole">0</span></button>
+          <button role="tab" data-tab="help" aria-selected="false">Ajuda</button>
+          <span class="spacer"></span>
+          <button class="mini" id="btnResetParams" type="button" hidden>Restaurar valores</button>
+        </div>
+        <div class="dpanel" id="pParams"></div>
+        <div class="dpanel" id="pConsole" hidden><div class="log" id="log"></div></div>
+        <div class="dpanel" id="pHelp" hidden></div>
+      </section>
+    </section>
+  </main>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script src="vendor/three.min.js"></script>
+<script src="vendor/OrbitControls.js"></script>
+<script src="vendor/jscad-modeling.min.js"></script>
+<script src="vendor/clipper.js"></script>
+<script src="vendor/codemirror/codemirror.js"></script>
+<script src="vendor/codemirror/simple.js"></script>
+<script src="vendor/codemirror/matchbrackets.js"></script>
+<script src="vendor/codemirror/closebrackets.js"></script>
+<script src="vendor/codemirror/comment.js"></script>
+<script src="vendor/codemirror/active-line.js"></script>
+<script src="vendor/codemirror/show-hint.js"></script>
+<script src="js/engine.js"></script>
+<script src="js/handler.js"></script>
+<script src="js/examples.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "forja-3d",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CAD por código no navegador, compatível com a linguagem do OpenSCAD.",
+  "scripts": {
+    "test": "node tests/engine.test.js && node tests/examples.test.js",
+    "start": "python3 -m http.server 8000"
+  },
+  "devDependencies": {
+    "@jscad/modeling": "2.13.0",
+    "clipper-lib": "6.4.2"
+  }
+}
