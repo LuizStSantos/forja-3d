@@ -1155,6 +1155,18 @@ tampa = true;</pre></div>`;
 
   // ───────── menus ─────────
   const MENUS = [['#btnExamples', '#menuExamples'], ['#btnFile', '#menuFile'], ['#btnExport', '#menuExport']];
+  // mantém o menu inteiro dentro da tela (celular, janelas estreitas)
+  function placeMenu(menu) {
+    const pad = 8;
+    menu.style.transform = '';
+    menu.style.maxHeight = '';
+    const r = menu.getBoundingClientRect();
+    let dx = 0;
+    if (r.right > window.innerWidth - pad) dx = window.innerWidth - pad - r.right;
+    if (r.left + dx < pad) dx = pad - r.left;
+    if (dx) menu.style.transform = `translateX(${Math.round(dx)}px)`;
+    menu.style.maxHeight = Math.max(160, window.innerHeight - r.top - 12) + 'px';
+  }
   function closeMenus() { MENUS.forEach(([b, m]) => { $(m).hidden = true; $(b).setAttribute('aria-expanded', 'false'); }); }
   MENUS.forEach(([b, m]) => {
     $(b).addEventListener('click', (e) => {
@@ -1164,8 +1176,7 @@ tampa = true;</pre></div>`;
       if (open) {
         $(m).hidden = false;
         $(b).setAttribute('aria-expanded', 'true');
-        const r = $(m).getBoundingClientRect();
-        if (r.right > window.innerWidth - 8) { $(m).style.left = 'auto'; $(m).style.right = '0'; }
+        placeMenu($(m));
         const first = $(m).querySelector('button:not([disabled])');
         if (first) first.focus();
       }
@@ -1235,7 +1246,7 @@ tampa = true;</pre></div>`;
   const bench = $('#bench');
   const savedLeft = store.get('left', ''), savedDrawer = store.get('drawer', '');
   if (savedLeft) bench.style.setProperty('--left', savedLeft);
-  if (savedDrawer) $('.right').style.setProperty('--drawer', savedDrawer);
+  if (savedDrawer) $('.pane-stage').style.setProperty('--drawer', savedDrawer);
   function setupSplit(el, axis) {
     el.addEventListener('pointerdown', (e) => {
       e.preventDefault();
@@ -1247,9 +1258,9 @@ tampa = true;</pre></div>`;
           const x = clamp(ev.clientX - r.left, 300, r.width - 360);
           bench.style.setProperty('--left', x + 'px');
         } else {
-          const r = $('.right').getBoundingClientRect();
+          const r = $('.pane-stage').getBoundingClientRect();
           const y = clamp(r.bottom - ev.clientY, 110, r.height - 180);
-          $('.right').style.setProperty('--drawer', y + 'px');
+          $('.pane-stage').style.setProperty('--drawer', y + 'px');
         }
       };
       const up = () => {
@@ -1258,7 +1269,7 @@ tampa = true;</pre></div>`;
         el.removeEventListener('pointerup', up);
         el.removeEventListener('pointercancel', up);
         store.set('left', bench.style.getPropertyValue('--left'));
-        store.set('drawer', $('.right').style.getPropertyValue('--drawer'));
+        store.set('drawer', $('.pane-stage').style.getPropertyValue('--drawer'));
         cm.refresh();
       };
       el.addEventListener('pointermove', move);
@@ -1293,5 +1304,5 @@ tampa = true;</pre></div>`;
   cm.setCursor({ line: 0, ch: 0 });
   runner.init();
   renderNow();
-  window.addEventListener('resize', () => cm.refresh());
+  window.addEventListener('resize', () => { cm.refresh(); closeMenus(); });
 })();

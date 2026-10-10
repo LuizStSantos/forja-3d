@@ -68,7 +68,7 @@
         <span class="lbl lbl-opt">Exportar</span>
         <svg class="i chev" viewBox="0 0 20 20"><path d="m6 8 4 4 4-4"/></svg>
       </button>
-      <div class="menu right" id="menuExport" hidden>
+      <div class="menu menu-end" id="menuExport" hidden>
         <div class="lbl">Para impressão 3D</div>
         <button data-exp="stl"><svg class="i" viewBox="0 0 20 20"><path d="M10 2.5 17 6.5v7L10 17.5 3 13.5v-7z M3 6.5l7 4 7-4 M10 10.5v7"/></svg><b>STL</b><small>Para o fatiador (Cura, PrusaSlicer, Bambu Studio)</small></button>
         <button data-exp="obj"><svg class="i" viewBox="0 0 20 20"><path d="M10 2.5 17 6.5v7L10 17.5 3 13.5v-7z"/></svg><b>OBJ</b><small>Para Blender e outros programas 3D</small></button>
@@ -87,7 +87,7 @@
   </nav>
 
   <main class="bench" id="bench">
-    <section class="left" aria-label="Código">
+    <section class="pane-code" aria-label="Código">
       <div class="tray">
         <div class="tray-tabs" role="tablist" id="trayTabs"></div>
         <div class="chips" id="chips"></div>
@@ -96,7 +96,7 @@
       <div class="edfoot"><span id="cursorPos">Linha 1, coluna 1</span><span>Ctrl+Espaço sugere · Ctrl+/ comenta</span></div>
     </section>
     <div class="split v" id="splitV" role="separator" aria-orientation="vertical" aria-label="Redimensionar painéis"></div>
-    <section class="right">
+    <section class="pane-stage">
       <div class="mat" id="mat" aria-label="Visualização 3D">
         <canvas id="view"></canvas>
         <div class="readout" id="readout" hidden><div class="dims"></div><div class="mass"></div></div>
