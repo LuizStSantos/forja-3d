@@ -1,4 +1,10 @@
 const E = require('../js/engine.js');
+
+(async () => {
+const wasm = await (await import('manifold-3d')).default();
+wasm.setup();
+E.setManifold(wasm);
+
 let fails = 0;
 function check(name, src, fn) {
   const r = E.run(src);
@@ -48,6 +54,9 @@ check('linear_extrude', 'linear_extrude(height=10) square(5);', r => near(E.volu
 check('linear_extrude center', 'linear_extrude(height=10, center=true) square(5);', r => near(E.bounds(r.objects)[0][2], -5, 1e-9));
 check('linear_extrude scale', 'linear_extrude(height=10, scale=0.5) square(10, center=true);', r => near(E.volume(r.objects), 10/3*(100+25+50), 0.5));
 check('linear_extrude twist', 'linear_extrude(height=20, twist=90, slices=20) square(10, center=true);', r => near(E.volume(r.objects), 2000, 60));
+check('twist sentido horário (OpenSCAD)', 'linear_extrude(height=10, twist=90, slices=10) square([10,1]);', r => near(E.bounds(r.objects)[0][1], -10, 0.05));
+check('rotate_extrude negativo', 'rotate_extrude(angle=-90, $fn=64) translate([10,0]) square(2);', r => { const b = E.bounds(r.objects); near(b[1][1], 0, 1e-6); near(b[0][1], -12, 0.01); });
+check('polyhedron aberto avisa', 'polyhedron(points=[[0,0,0],[1,0,0],[0,1,0],[0,0,1]], faces=[[0,1,2],[0,3,1]]);', r => { if (!r.warnings.some(w => w.msg.includes('polyhedron'))) throw new Error('sem aviso'); });
 check('rotate_extrude torus', 'rotate_extrude($fn=200) translate([10,0]) circle(r=2, $fn=100);', r => near(E.volume(r.objects), 2*Math.PI*Math.PI*10*4, 5));
 check('rotate_extrude angle', 'rotate_extrude(angle=90, $fn=200) translate([10,0]) square([2,2]);', r => near(E.volume(r.objects), Math.PI/2*(144-100)/2*2, 1));
 check('offset r', 'linear_extrude(1) offset(r=1, $fn=64) square(10);', r => near(E.volume(r.objects), 100+40+Math.PI, 0.2));
@@ -57,6 +66,7 @@ check('polygon clockwise', 'linear_extrude(1) polygon([[0,0],[0,10],[10,0]]);', 
 check('polyhedron cube', `polyhedron(points=[[0,0,0],[10,0,0],[10,7,0],[0,7,0],[0,0,5],[10,0,5],[10,7,5],[0,7,5]],
   faces=[[0,1,2,3],[4,5,1,0],[7,6,5,4],[5,6,2,1],[6,7,3,2],[7,4,0,3]]);`, r => near(E.volume(r.objects), 350, 1e-6));
 check('hull', 'hull(){ cube(1); translate([10,0,0]) cube(1); }', r => near(E.volume(r.objects), 11, 1e-6));
+check('minkowski não convexo', 'minkowski(){ union(){ cube([10,2,2]); cube([2,10,2]); } cube(1, center=true); }', r => near(E.volume(r.objects), 171, 0.01));
 check('minkowski', 'minkowski(){ cube([10,10,1]); cylinder(r=1,h=1,$fn=4); }', r => { const b=E.bounds(r.objects); near(b[1][0]-b[0][0], 12, 1e-6); near(b[1][2]-b[0][2], 2, 1e-6); });
 check('resize', 'resize([20,0,0], auto=true) cube([10,5,2]);', r => { const b=E.bounds(r.objects); near(b[1][0],20,1e-9); near(b[1][1],10,1e-9); });
 check('color', 'color("red") cube(1); color([0,0,1,0.5]) sphere(1);', r => { eq(r.objects[0].color, [1,0,0,1]); eq(r.objects[1].color, [0,0,1,0.5]); });
@@ -87,3 +97,4 @@ check('svg export', 'square(10); circle(3);', r => { const s = E.toSVG(r.objects
 
 console.log(fails ? `\n${fails} FALHAS` : '\nTODOS OK');
 if (fails) process.exit(1);
+})();

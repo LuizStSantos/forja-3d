@@ -19,7 +19,7 @@ Você escreve a peça em código e vê o resultado em 3D na hora, sem instalar n
 - **Clique numa peça** no 3D para ir à linha que a criou.
 - **Medidas e massa**: dimensões em mm, volume e uma estimativa em gramas de PLA.
 - **Erros em português**, com a linha marcada no editor.
-- **Exportação**: STL, OBJ, SVG (corte a laser), PNG e o próprio `.scad`.
+- **Exportação**: STL, OBJ, SVG (corte a laser), PNG e o próprio `.scad`. O STL sai sempre com a malha fechada (sem arestas não-manifold), pronto para o fatiador.
 - **Atalhos em português** (opcionais): `cubo`, `esfera`, `cilindro`, `mover`, `girar`, `diferenca`, `uniao`… e cores como `"vermelho"`.
 - O rascunho fica salvo no seu navegador.
 
@@ -32,7 +32,7 @@ Funciona: `cube`, `sphere`, `cylinder`, `polyhedron`, `square`, `circle`, `polyg
 listas `[for (...) ...]`, funções anônimas, `echo`, `assert`, `$fn`/`$fa`/`$fs` e os modificadores `# % * !`.
 
 Ainda não funciona: `include`/`use` de bibliotecas, `import()` de arquivos e `surface()`.
-O `text()` usa uma fonte de traço simples e remove acentos, e `minkowski()` em 3D é exato só com formas convexas.
+O `text()` usa uma fonte de traço simples e remove acentos.
 
 ## Rodar no seu computador
 
@@ -43,7 +43,7 @@ python3 -m http.server 8000
 # abra http://localhost:8000
 ```
 
-Abrir o `index.html` direto do disco também funciona, mas a renderização roda na própria página (sem o modo em segundo plano).
+Abrir o `index.html` direto do disco não funciona: o motor 3D é WebAssembly e o navegador só o carrega por http(s).
 
 ## Testes do motor
 
@@ -52,18 +52,21 @@ npm install
 npm test
 ```
 
+Os testes conferem a linguagem, os volumes e se cada exemplo exporta um STL com a malha fechada.
+
 ## Como é feito
 
 | Arquivo | O que faz |
 |---|---|
-| `js/engine.js` | Interpretador da linguagem OpenSCAD (lexer, parser, avaliador) e geração da geometria |
+| `js/engine.js` | Interpretador da linguagem OpenSCAD (lexer, parser, avaliador) e geração da geometria (3D com Manifold, 2D com Clipper) |
 | `js/handler.js`, `js/worker.js` | Renderização em segundo plano (Web Worker) e exportação |
 | `js/app.js` | Interface: editor, visualização 3D, parâmetros, console, menus |
 | `js/examples.js` | Exemplos prontos |
 | `css/forja.css` | Estilo (tema claro e escuro) |
 
 Bibliotecas usadas (em `vendor/`, todas de código aberto):
-[JSCAD modeling](https://github.com/jscad/OpenJSCAD.org) (geometria 3D, MIT),
+[Manifold](https://github.com/elalish/manifold) (geometria 3D, o mesmo motor do OpenSCAD atual, Apache-2.0),
 [Clipper](http://www.angusj.com/clipper2/Docs/Overview.htm) (geometria 2D, a mesma usada pelo OpenSCAD, Boost),
+[JSCAD modeling](https://github.com/jscad/OpenJSCAD.org) (fonte do `text()`, MIT),
 [three.js](https://threejs.org) (visualização, MIT) e
 [CodeMirror 5](https://codemirror.net/5/) (editor, MIT).

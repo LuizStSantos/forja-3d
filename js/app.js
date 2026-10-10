@@ -631,11 +631,17 @@
       let w;
       try { w = makeWorker(); } catch (e) { this.goLocal(); return; }
       this.w = w;
-      const timer = setTimeout(() => { if (this.w === w && this.mode === 'starting') { w.terminate(); this.goLocal(); } }, 12000);
+      const timer = setTimeout(() => { if (this.w === w && this.mode === 'starting') { w.terminate(); this.goLocal(); } }, 30000);
       w.onmessage = (e) => {
         if (this.w !== w) return;
         const m = e.data;
-        if (m && m.type === 'hello') { clearTimeout(timer); this.mode = 'worker'; this.pump(); return; }
+        if (m && m.type === 'hello') {
+          clearTimeout(timer);
+          if (!m.ok) { w.terminate(); this.goLocal(); return; }
+          this.mode = 'worker';
+          this.pump();
+          return;
+        }
         this.onReply(m);
       };
       w.onerror = (e) => {
@@ -648,11 +654,23 @@
       };
       w.postMessage({ type: 'hello' });
     },
+    // plano B: sem worker, o motor roda na própria página (a interface pode travar durante o cálculo)
     goLocal() {
       this.w = null;
-      this.mode = 'local';
-      this.local = window.forjaHandler(E, 60000);
-      this.pump();
+      this.mode = 'starting';
+      import(new URL('vendor/manifold/manifold.js', document.baseURI).href)
+        .then((mod) => mod.default())
+        .then((wasm) => {
+          wasm.setup();
+          E.setManifold(wasm);
+          this.local = window.forjaHandler(E, 60000);
+          this.mode = 'local';
+          this.pump();
+        })
+        .catch((err) => {
+          this.mode = 'failed';
+          ui.engineFailed('Não foi possível carregar o motor 3D. Abra o Forja 3D por um endereço http(s), não direto do disco. (' + ((err && err.message) || err) + ')');
+        });
     },
     send(m) {
       if (this.mode === 'worker') { this.w.postMessage(m); return; }
@@ -670,7 +688,7 @@
       this.pump();
     },
     pump() {
-      if (this.busy || this.queued === null || this.mode === 'starting') return;
+      if (this.busy || this.queued === null || this.mode === 'starting' || this.mode === 'failed') return;
       const code = this.queued;
       this.queued = null;
       this.busy = true;
@@ -698,6 +716,11 @@
       this.busy = false;
       this.spawn();
     },
+    // um erro dentro do WebAssembly deixa a memória dele inutilizável: começa um motor novo
+    recover() {
+      if (this.mode === 'worker') this.restart();
+      else if (this.mode === 'local') this.goLocal();
+    },
     stop() {
       this.queued = null;
       if (this.mode !== 'worker') return;
@@ -708,7 +731,11 @@
       return new Promise((resolve, reject) => {
         const id = ++this.seq;
         this.exports.set(id, { resolve, reject });
-        const go = () => { if (this.mode === 'starting') return setTimeout(go, 120); this.send({ type: 'export', id, format, code, name }); };
+        const go = () => {
+          if (this.mode === 'starting') return setTimeout(go, 120);
+          if (this.mode === 'failed') { this.exports.delete(id); reject(new Error('O motor 3D não carregou.')); return; }
+          this.send({ type: 'export', id, format, code, name });
+        };
         go();
       });
     },
@@ -734,6 +761,15 @@
         if (sec >= 2) { label.textContent = `Renderizando… ${sec} s`; setStatus('busy', `Renderizando… ${sec} s`); }
       }, 1000);
     },
+    engineFailed(msg) {
+      stopBusy();
+      setStatus('err', 'Motor 3D indisponível');
+      const eb = $('#errbar');
+      eb.hidden = false;
+      eb.querySelector('b').textContent = 'Erro';
+      eb.querySelector('span').textContent = msg;
+      eb.dataset.line = '';
+    },
     renderStopped(msg) {
       stopBusy();
       setStatus('stale', 'Interrompido');
@@ -744,6 +780,7 @@
       lastResult = m;
       const tris = m.meshes.reduce((s, x) => s + (x.ghost ? 0 : x.pos.length / 9), 0);
       if (m.error) {
+        if (/memory access out of bounds|unreachable|Aborted|out of memory/i.test(m.error.msg)) runner.recover();
         setStatus('err', m.error.line ? `Erro na linha ${m.error.line}` : 'Erro');
         const eb = $('#errbar');
         eb.hidden = false;
@@ -1088,7 +1125,7 @@ tampa = true;</pre></div>`;
 <section><h3>Em português</h3>
 <p>Você também pode escrever <code>cubo</code>, <code>esfera</code>, <code>cilindro</code>, <code>mover</code>, <code>girar</code>, <code>escalar</code>, <code>espelhar</code>, <code>cor</code>, <code>diferenca</code>, <code>uniao</code>, <code>intersecao</code>, <code>envoltoria</code>, <code>extrudar</code> e <code>revolver</code>, e cores como <code>"vermelho"</code> e <code>"azul"</code>. Esses atalhos não existem no OpenSCAD original.</p></section>
 <section><h3>Diferenças do OpenSCAD</h3>
-<p class="note">Roda no navegador, sem instalar nada. Não carrega bibliotecas com <code>include</code>/<code>use</code> nem arquivos com <code>import()</code>. O <code>text()</code> usa uma fonte de traço simples e remove acentos. <code>minkowski()</code> é exato só com formas convexas.</p></section>
+<p class="note">Roda no navegador, sem instalar nada. Não carrega bibliotecas com <code>include</code>/<code>use</code> nem arquivos com <code>import()</code>. O <code>text()</code> usa uma fonte de traço simples e remove acentos.</p></section>
 </div>`;
     $$('#pHelp .ins').forEach((b) => b.addEventListener('click', () => { if (isMobile()) setPane('code'); insertCode(b.dataset.ins); afterTool(); }));
   }

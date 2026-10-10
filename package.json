@@ -9,6 +9,7 @@
   },
   "devDependencies": {
     "@jscad/modeling": "2.13.0",
-    "clipper-lib": "6.4.2"
+    "clipper-lib": "6.4.2",
+    "manifold-3d": "^3.5.3"
   }
 }

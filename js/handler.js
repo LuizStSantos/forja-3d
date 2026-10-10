@@ -3,7 +3,13 @@
   'use strict';
   function forjaHandler(E, timeLimit) {
     let last = null;
-    function runCode(code) { const r = E.run(code, { timeLimit }); last = { code, r }; return r; }
+    // o resultado anterior guarda geometria na memória do WebAssembly: libera antes de calcular outro
+    function runCode(code) {
+      if (last) { last.r.dispose(); last = null; }
+      const r = E.run(code, { timeLimit });
+      last = { code, r };
+      return r;
+    }
     return function (m) {
       if (m.type === 'hello') return { reply: { type: 'hello' }, transfer: [] };
       if (m.type === 'run') {

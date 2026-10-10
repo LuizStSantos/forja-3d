@@ -1,11 +1,11 @@
-/* Forja 3D — motor compatível com a linguagem OpenSCAD, construído sobre @jscad/modeling */
+/* Forja 3D — motor compatível com a linguagem OpenSCAD.
+   3D: Manifold (o mesmo motor do OpenSCAD atual). 2D: Clipper (o mesmo do OpenSCAD). Texto: fonte de traço do JSCAD. */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory(require('@jscad/modeling'), require('clipper-lib'));
   else root.ForjaEngine = factory(root.jscadModeling, root.ClipperLib);
 })(typeof self !== 'undefined' ? self : this, function (J, CL) {
   'use strict';
 
-  const { geom2, geom3, poly3 } = J.geometries;
   const DEG = Math.PI / 180;
 
   // ───────────────────────────── 2D (Clipper, como no OpenSCAD) ─────────────────────────────
@@ -87,15 +87,81 @@
       for (const p of paths) for (let i = 0; i < p.length; i++) { const u = p[i], v = p[(i + 1) % p.length]; a += u[0] * v[1] - v[0] * u[1]; }
       return a / 2;
     },
-    toGeom2(paths) {
-      const sides = [];
-      for (const p of paths) for (let i = 0; i < p.length; i++) sides.push([p[i], p[(i + 1) % p.length]]);
-      return geom2.create(sides);
-    },
-    sides(paths) {
-      const sides = [];
-      for (const p of paths) for (let i = 0; i < p.length; i++) sides.push([p[i], p[(i + 1) % p.length]]);
-      return sides;
+  };
+
+  // envoltória convexa 2D (cadeia monótona), devolve o contorno no sentido anti-horário
+  function hull2(pts) {
+    const p = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    if (p.length < 3) return p;
+    const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    const lo = [], hi = [];
+    for (const q of p) { while (lo.length >= 2 && cross(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop(); lo.push(q); }
+    for (let i = p.length - 1; i >= 0; i--) { const q = p[i]; while (hi.length >= 2 && cross(hi[hi.length - 2], hi[hi.length - 1], q) <= 0) hi.pop(); hi.push(q); }
+    lo.pop(); hi.pop();
+    return lo.concat(hi);
+  }
+
+  // ───────────────────────────── 3D (Manifold) ─────────────────────────────
+  // Sólidos 3D são objetos Manifold (WebAssembly). Toda operação devolve uma malha fechada,
+  // pronta para o fatiador. A memória do WebAssembly não é liberada sozinha: cada sólido criado
+  // numa renderização vai para a "arena" e tudo é liberado quando o resultado não é mais usado.
+  let MF = null;
+  let ARENA = null;
+  function setManifold(wasm) { MF = { Manifold: wasm.Manifold, CrossSection: wasm.CrossSection, Mesh: wasm.Mesh }; }
+  function need3D() { if (!MF) throw new Error('o motor 3D (Manifold) ainda não carregou'); }
+  function keep(x) { if (ARENA) ARENA.push(x); return x; }
+  function freeAll(list) { for (const x of list) { try { x.delete(); } catch (e) { /* já liberado */ } } list.length = 0; }
+  // contornos 2D (Clipper) → CrossSection temporária do Manifold
+  function withCS(paths, fn) {
+    need3D();
+    const cs = new MF.CrossSection(paths, 'NonZero');
+    try { return fn(cs); } finally { cs.delete(); }
+  }
+  function csToPaths(cs) {
+    try { return P2.sanitize(cs.toPolygons().map((p) => p.map((q) => [q[0], q[1]]))); } finally { cs.delete(); }
+  }
+  // faces (listas de pontos no sentido anti-horário visto de fora) → sólido; vértices iguais são compartilhados
+  function solidFromFaces(faces) {
+    need3D();
+    const ids = new Map(), pos = [], tri = [];
+    const vid = (p) => {
+      const k = p[0] + ',' + p[1] + ',' + p[2];
+      let i = ids.get(k);
+      if (i === undefined) { i = pos.length / 3; ids.set(k, i); pos.push(p[0], p[1], p[2]); }
+      return i;
+    };
+    for (const f of faces) {
+      const idx = [];
+      for (const p of f) { const i = vid(p); if (idx[idx.length - 1] !== i) idx.push(i); }
+      if (idx.length > 1 && idx[0] === idx[idx.length - 1]) idx.pop();
+      if (idx.length < 3) continue;
+      if (idx.length === 3) { tri.push(idx[0], idx[1], idx[2]); continue; }
+      const pts = idx.map((i) => [pos[3 * i], pos[3 * i + 1], pos[3 * i + 2]]);
+      let nx = 0, ny = 0, nz = 0;
+      for (let i = 0; i < pts.length; i++) {
+        const a = pts[i], b = pts[(i + 1) % pts.length];
+        nx += (a[1] - b[1]) * (a[2] + b[2]); ny += (a[2] - b[2]) * (a[0] + b[0]); nz += (a[0] - b[0]) * (a[1] + b[1]);
+      }
+      const ax = Math.abs(nx), ay = Math.abs(ny), az = Math.abs(nz);
+      let p2;
+      if (az >= ax && az >= ay) p2 = pts.map((q) => (nz >= 0 ? [q[0], q[1]] : [q[1], q[0]]));
+      else if (ax >= ay) p2 = pts.map((q) => (nx >= 0 ? [q[1], q[2]] : [q[2], q[1]]));
+      else p2 = pts.map((q) => (ny >= 0 ? [q[2], q[0]] : [q[0], q[2]]));
+      for (const t of earclip(p2)) tri.push(idx[t[0]], idx[t[1]], idx[t[2]]);
+    }
+    const mesh = new MF.Mesh({ numProp: 3, vertProperties: new Float32Array(pos), triVerts: new Uint32Array(tri) });
+    mesh.merge();
+    return keep(new MF.Manifold(mesh));
+  }
+  const S3 = {
+    union(list) { need3D(); return list.length === 1 ? list[0] : keep(MF.Manifold.union(list)); },
+    difference(base, tools) { need3D(); return tools.length ? keep(MF.Manifold.difference([base].concat(tools))) : base; },
+    intersection(list) { need3D(); return list.length === 1 ? list[0] : keep(MF.Manifold.intersection(list)); },
+    transform(g, m) { return keep(g.transform(toColMajor(m))); },
+    bounds(g) {
+      if (g.isEmpty()) return [[0, 0, 0], [0, 0, 0]];
+      const b = g.boundingBox();
+      return [[b.min[0], b.min[1], b.min[2]], [b.max[0], b.max[1], b.max[2]]];
     },
   };
 
@@ -812,39 +878,12 @@
     return tris;
   }
 
-  // build a geom3 from a list of 3D polygons (each a list of points, CCW from outside); triangulates non-triangles
-  function geom3FromFaces(faces) {
-    const polys = [];
-    for (const f of faces) {
-      if (f.length < 3) continue;
-      if (f.length === 3) { polys.push(f); continue; }
-      // Newell normal
-      let nx = 0, ny = 0, nz = 0;
-      for (let i = 0; i < f.length; i++) {
-        const p = f[i], q = f[(i + 1) % f.length];
-        nx += (p[1] - q[1]) * (p[2] + q[2]); ny += (p[2] - q[2]) * (p[0] + q[0]); nz += (p[0] - q[0]) * (p[1] + q[1]);
-      }
-      const ax = Math.abs(nx), ay = Math.abs(ny), az = Math.abs(nz);
-      let pts2;
-      if (az >= ax && az >= ay) pts2 = f.map((p) => (nz >= 0 ? [p[0], p[1]] : [p[1], p[0]]));
-      else if (ax >= ay) pts2 = f.map((p) => (nx >= 0 ? [p[1], p[2]] : [p[2], p[1]]));
-      else pts2 = f.map((p) => (ny >= 0 ? [p[2], p[0]] : [p[0], p[2]]));
-      for (const t of earclip(pts2)) polys.push([f[t[0]], f[t[1]], f[t[2]]]);
-    }
-    const valid = polys.filter((p) => {
-      const [a, b, c] = p;
-      const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
-      return Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) > 1e-14;
-    });
-    return geom3.create(valid.map((p) => poly3.create(p)));
-  }
-
   function isEmptyGeom(o) {
-    if (o.dim === 3) return geom3.toPolygons(o.g).length === 0;
+    if (o.dim === 3) return o.g.isEmpty();
     return o.g.length === 0;
   }
   function objBounds(o) {
-    return o.dim === 2 ? P2.bounds(o.g) : J.measurements.measureBoundingBox(o.g);
+    return o.dim === 2 ? P2.bounds(o.g) : S3.bounds(o.g);
   }
 
   function mkObj(g, dim, line) { return { g, dim, color: null, line }; }
@@ -858,8 +897,7 @@
     return { solids: list.solids.map((o) => ({ ...o, g: fn(o.g, o.dim) })), ghosts: list.ghosts.map((o) => ({ ...o, g: fn(o.g, o.dim) })) };
   }
   function applyMatrix(list, m) {
-    const cm = toColMajor(m);
-    return mapList(list, (g, dim) => (dim === 2 ? P2.transform(g, m) : J.transforms.transform(cm, g)));
+    return mapList(list, (g, dim) => (dim === 2 ? P2.transform(g, m) : S3.transform(g, m)));
   }
 
   // union a set of objects of a given dim into one object (keeps first color / line)
@@ -868,7 +906,7 @@
     if (!sel.length) return null;
     let g;
     if (dim === 2) g = sel.length === 1 ? sel[0].g : P2.union(sel.map((o) => o.g));
-    else g = sel.length === 1 ? sel[0].g : J.booleans.union(sel.map((o) => o.g));
+    else g = S3.union(sel.map((o) => o.g));
     return { g, dim, color: sel[0].color, line: sel[0].line };
   }
   function mainDim(objs) { return objs.some((o) => o.dim === 3) ? 3 : objs.length ? 2 : 0; }
@@ -1266,7 +1304,7 @@
       const parts = nonEmpty.map((l) => unionObjs(l.solids, dim)).filter(Boolean);
       if (kind === 'union') {
         if (parts.length === 1) return { solids: [parts[0]], ghosts };
-        const g = dim === 2 ? P2.union(parts.map((p) => p.g)) : J.booleans.union(parts.map((p) => p.g));
+        const g = dim === 2 ? P2.union(parts.map((p) => p.g)) : S3.union(parts.map((p) => p.g));
         return { solids: [{ g, dim, color: parts[0].color, line: parts[0].line }], ghosts };
       }
       if (kind === 'difference') {
@@ -1276,16 +1314,12 @@
         const tools = [];
         for (let i = first + 1; i < lists.length; i++) for (const o of lists[i].solids) if (o.dim === dim) tools.push(o.g);
         let g = base.g;
-        if (tools.length) {
-          if (dim === 2) g = P2.difference(base.g, tools);
-          // juntar as ferramentas antes e subtrair uma vez só é bem mais rápido que subtrair uma a uma
-          else g = J.booleans.subtract(base.g, tools.length > 1 ? J.booleans.union(tools) : tools[0]);
-        }
+        if (tools.length) g = dim === 2 ? P2.difference(base.g, tools) : S3.difference(base.g, tools);
         return { solids: [{ g, dim, color: base.color, line: base.line }], ghosts };
       }
       if (kind === 'intersection') {
         if (parts.length === 1) return { solids: [parts[0]], ghosts };
-        const g = dim === 2 ? P2.intersection(parts.map((p) => p.g)) : J.booleans.intersect(...parts.map((p) => p.g));
+        const g = dim === 2 ? P2.intersection(parts.map((p) => p.g)) : S3.intersection(parts.map((p) => p.g));
         return { solids: [{ g, dim, color: parts[0].color, line: parts[0].line }], ghosts };
       }
       return { solids: [], ghosts };
@@ -1310,9 +1344,8 @@
       const center = truthy(ctx.arg(['center'], ctx.pos[1]));
       const [x, y, z] = vec3arg(size === undefined ? 1 : size, 1);
       if (!(x > 0 && y > 0 && z > 0)) { ctx.it.warn('cube() com tamanho zero ou negativo foi ignorado', ctx.line); return EMPTY(); }
-      const o = center ? [-x / 2, -y / 2, -z / 2] : [0, 0, 0];
-      const g = J.primitives.cuboid({ size: [x, y, z], center: [o[0] + x / 2, o[1] + y / 2, o[2] + z / 2] });
-      return prim(ctx, g, 3);
+      need3D();
+      return prim(ctx, keep(MF.Manifold.cube([x, y, z], center)), 3);
     },
     sphere(ctx) {
       let r = ctx.arg(['r'], ctx.pos[0]);
@@ -1338,7 +1371,7 @@
         }
       }
       faces.push(ring[rings - 1].slice().reverse());
-      return prim(ctx, geom3FromFaces(faces), 3);
+      return prim(ctx, solidFromFaces(faces), 3);
     },
     cylinder(ctx) {
       let h = ctx.arg(['h'], ctx.pos[0]);
@@ -1367,7 +1400,7 @@
         else if (bot) faces.push([bot[j], bot[j1], [0, 0, z1]]);
         else faces.push([[0, 0, z0], top[j1], top[j]]);
       }
-      return prim(ctx, geom3FromFaces(faces), 3);
+      return prim(ctx, solidFromFaces(faces), 3);
     },
     polyhedron(ctx) {
       const pts = ctx.arg(['points'], ctx.pos[0]);
@@ -1377,9 +1410,13 @@
       for (const f of faces) {
         if (!isVec(f) || f.length < 3) continue;
         const poly = f.map((i) => pts[i]).filter((p) => isVec(p)).map((p) => [num(p[0], 0), num(p[1], 0), num(p[2], 0)]);
-        if (poly.length >= 3) fl.push(poly.reverse()); // OpenSCAD faces are clockwise
+        if (poly.length >= 3) fl.push(poly.reverse()); // no OpenSCAD as faces são horárias
       }
-      return prim(ctx, geom3FromFaces(fl), 3);
+      try { return prim(ctx, solidFromFaces(fl), 3); }
+      catch (e) {
+        ctx.it.warn('polyhedron(): as faces não formam um sólido fechado (confira se todas as arestas são compartilhadas por duas faces e se todas estão no sentido horário vistas de fora)', ctx.line);
+        return EMPTY();
+      }
     },
     square(ctx) {
       const size = ctx.arg(['size'], ctx.pos[0]);
@@ -1528,8 +1565,8 @@
       if (dim === 2) {
         const pts = [], seen = new Set();
         for (const o of sel) for (const p of o.g) for (const q of p) { const k = q[0].toFixed(6) + ',' + q[1].toFixed(6); if (!seen.has(k)) { seen.add(k); pts.push([q[0], q[1]]); } }
-        g = pts.length >= 3 ? poly2(J.hulls.hullPoints2(pts)) || [] : [];
-      } else g = J.hulls.hull(...sel.map((o) => o.g));
+        g = pts.length >= 3 ? poly2(hull2(pts)) || [] : [];
+      } else { need3D(); g = keep(MF.Manifold.hull(sel.map((o) => o.g))); }
       return { solids: [{ g, dim, color: sel[0].color, line: sel[0].line }], ghosts: list.ghosts };
     },
     minkowski(ctx) {
@@ -1544,29 +1581,8 @@
         for (let i = 1; i < parts.length; i++) acc2 = P2.minkowski(acc2, parts[i].g);
         return { solids: [{ g: acc2, dim, color: parts[0].color, line: parts[0].line }], ghosts };
       }
-      const ptsOf = (o) => {
-        const out = [], seen = new Set();
-        for (const p of geom3.toPolygons(o.g)) for (const v of p.vertices) { const k = v.map((x) => x.toFixed(6)).join(','); if (!seen.has(k)) { seen.add(k); out.push([v[0], v[1], v[2]]); } }
-        return out;
-      };
-      let acc = ptsOf(parts[0]);
-      let nonConvex = false;
-      if (dim === 3) {
-        const v0 = J.measurements.measureVolume(parts[0].g), vh = J.measurements.measureVolume(J.hulls.hull(parts[0].g));
-        if (Math.abs(vh - v0) > Math.abs(vh) * 0.001) nonConvex = true;
-      }
-      for (let i = 1; i < parts.length; i++) {
-        const b = ptsOf(parts[i]);
-        const next = [], seen = new Set();
-        for (const p of acc) for (const q of b) {
-          const s = [p[0] + q[0], p[1] + q[1], p[2] + q[2]];
-          const k = s.map((x) => x.toFixed(5)).join(',');
-          if (!seen.has(k)) { seen.add(k); next.push(s); }
-        }
-        acc = next;
-      }
-      if (nonConvex) ctx.it.warn('minkowski() com objeto não convexo é aproximado pela envoltória convexa', ctx.line);
-      const g = geom3.create(J.hulls.hullPoints3(acc));
+      let g = parts[0].g;
+      for (let i = 1; i < parts.length; i++) g = keep(g.minkowskiSum(parts[i].g));
       return { solids: [{ g, dim, color: parts[0].color, line: parts[0].line }], ghosts };
     },
     render(ctx) { return merge(ctx.children()); },
@@ -1582,8 +1598,8 @@
       if (!isNum(h)) h = 100;
       const list = merge(ctx.children());
       const u = unionObjs(list.solids, 2);
-      if (!u || !(h > 0)) return { solids: [], ghosts: list.ghosts };
-      const sx = Math.max(isVec(sc) ? num(sc[0], 1) : num(sc, 1), 1e-4), sy = Math.max(isVec(sc) ? num(sc[1], 1) : num(sc, 1), 1e-4);
+      if (!u || !u.g.length || !(h > 0)) return { solids: [], ghosts: list.ghosts };
+      const sx = Math.max(isVec(sc) ? num(sc[0], 1) : num(sc, 1), 0), sy = Math.max(isVec(sc) ? num(sc[1], 1) : num(sc, 1), 0);
       if (!isNum(slices) || slices < 1) {
         if (twist === 0) slices = 1;
         else {
@@ -1592,31 +1608,27 @@
         }
       }
       slices = Math.min(Math.floor(slices), 2000);
-      const S = J.extrusions.slice;
-      const base = S.fromSides(P2.sides(u.g));
-      const z0 = center ? -h / 2 : 0;
-      const g = J.extrusions.extrudeFromSlices({
-        numberOfSlices: slices + 1, capStart: true, capEnd: true, close: false, repair: true,
-        callback: (progress, index, b) => {
-          const t = index / slices;
-          const m = mm(Tm(0, 0, z0 + h * t), mm(Sm(1 + (sx - 1) * t, 1 + (sy - 1) * t, 1), Rz(-twist * t)));
-          return S.transform(toColMajor(m), b);
-        },
-      }, base);
+      // no Manifold a torção positiva é anti-horária; no OpenSCAD, horária
+      const g = withCS(u.g, (cs) => keep(MF.Manifold.extrude(cs, h, slices - 1, -twist, [sx, sy], center)));
       return { solids: [{ ...u, g, dim: 3 }], ghosts: list.ghosts };
     },
     rotate_extrude(ctx) {
       let angle = num(ctx.arg(['angle'], ctx.pos[0]), 360);
       const list = merge(ctx.children());
       const u = unionObjs(list.solids, 2);
-      if (!u) return { solids: [], ghosts: list.ghosts };
+      if (!u || !u.g.length) return { solids: [], ghosts: list.ghosts };
       const bb = P2.bounds(u.g);
       if (bb[0][0] < -1e-9 && bb[1][0] > 1e-9) { ctx.it.warn('rotate_extrude(): todos os pontos precisam ter x ≥ 0 (o perfil cruza o eixo)', ctx.line); }
       const maxR = Math.max(Math.abs(bb[0][0]), Math.abs(bb[1][0]));
       angle = Math.max(-360, Math.min(360, angle));
       if (angle === 0) return { solids: [], ghosts: list.ghosts };
-      const segs = Math.max(3, fragments(maxR, ctx.sc));
-      const g = J.extrusions.extrudeRotate({ segments: segs, angle: angle * DEG, startAngle: 0 }, P2.toGeom2(u.g));
+      // como no OpenSCAD: os segmentos são proporcionais ao ângulo (o Manifold conta só o trecho girado
+      // e precisa de no mínimo 3)
+      const full = fragments(maxR, ctx.sc);
+      const segs = Math.abs(angle) >= 360 ? Math.max(3, full) : Math.max(3, Math.ceil((full * Math.abs(angle)) / 360));
+      let g = withCS(u.g, (cs) => keep(MF.Manifold.revolve(cs, segs, Math.abs(angle))));
+      // ângulo negativo: gira no sentido horário (= espelho no plano XZ)
+      if (angle < 0) g = S3.transform(g, Sm(1, -1, 1));
       return { solids: [{ ...u, g, dim: 3 }], ghosts: list.ghosts };
     },
     projection(ctx) {
@@ -1624,23 +1636,8 @@
       const list = merge(ctx.children());
       const u = unionObjs(list.solids, 3);
       if (!u) return { solids: [], ghosts: list.ghosts };
-      let src = u.g;
-      if (cut) {
-        const bb = J.measurements.measureBoundingBox(src);
-        const big = Math.max(...bb[1].map((v, i) => v - bb[0][i])) * 4 + 10;
-        src = J.booleans.intersect(src, J.primitives.cuboid({ size: [big, big, 0.002], center: [(bb[0][0] + bb[1][0]) / 2, (bb[0][1] + bb[1][1]) / 2, 0] }));
-        if (geom3.toPolygons(src).length === 0) return { solids: [], ghosts: list.ghosts };
-      }
-      // sombra = união das faces voltadas para cima, projetadas no plano XY
-      const rings = [];
-      for (const p of geom3.toPolygons(src)) {
-        const v = p.vertices;
-        for (let i = 1; i < v.length - 1; i++) {
-          const t = [[v[0][0], v[0][1]], [v[i][0], v[i][1]], [v[i + 1][0], v[i + 1][1]]];
-          if (signedArea2(t) > 1e-12) rings.push(t);
-        }
-      }
-      const g = P2.sanitize(rings);
+      // cut = true: o corte no plano z = 0; senão, a sombra da peça vista de cima
+      const g = csToPaths(cut ? u.g.slice(0) : u.g.project());
       return { solids: [{ ...u, g, dim: 2 }], ghosts: list.ghosts };
     },
     import(ctx) { ctx.it.warn('import() de arquivos não é suportado nesta versão', ctx.line); return EMPTY(); },
@@ -1813,7 +1810,10 @@
     opts = opts || {};
     const t0 = Date.now();
     const result = { objects: [], ghosts: [], echoes: [], warnings: [], error: null, ast: null, time: 0 };
+    const arena = [];
+    result.dispose = () => freeAll(arena);
     let it = null;
+    ARENA = arena;
     try {
       const ast = parse(src);
       result.ast = ast;
@@ -1832,6 +1832,10 @@
       if (e instanceof RangeError) msg = 'Recursão profunda demais (estouro de pilha)';
       else if (!(e instanceof ScadError)) msg = 'Erro de geometria: ' + msg;
       result.error = { msg, line: e.line || null };
+      result.objects = []; result.ghosts = [];
+      freeAll(arena);
+    } finally {
+      ARENA = null;
     }
     if (it) { result.echoes = it.echoes; result.warnings = it.warnings; }
     result.time = Date.now() - t0;
@@ -1839,41 +1843,62 @@
   }
 
   // ───────────────────────────── Output helpers ─────────────────────────────
-  // triangles as flat Float32Array (x,y,z per vertex)
+  // malha do Manifold → triângulos soltos (x, y, z por vértice), para a visualização
+  function meshOf(g) {
+    const m = g.getMesh();
+    return { pos: m.vertProperties, tri: m.triVerts, np: m.numProp };
+  }
   function toTriangles(obj, thickness2d) {
-    let g = obj.g;
+    let g = obj.g, temp = null;
     if (obj.dim === 2) {
       const h = thickness2d || 1;
-      g = J.transforms.translate([0, 0, -h / 2], J.extrusions.extrudeLinear({ height: h }, P2.toGeom2(g)));
+      temp = withCS(g, (cs) => MF.Manifold.extrude(cs, h, 0, 0, [1, 1], true));
+      g = temp;
     }
-    const polys = geom3.toPolygons(g);
-    let count = 0;
-    for (const p of polys) count += Math.max(0, p.vertices.length - 2);
-    const arr = new Float32Array(count * 9);
-    let k = 0;
-    for (const p of polys) {
-      const v = p.vertices;
-      for (let i = 1; i < v.length - 1; i++) {
-        arr[k++] = v[0][0]; arr[k++] = v[0][1]; arr[k++] = v[0][2];
-        arr[k++] = v[i][0]; arr[k++] = v[i][1]; arr[k++] = v[i][2];
-        arr[k++] = v[i + 1][0]; arr[k++] = v[i + 1][1]; arr[k++] = v[i + 1][2];
+    try {
+      const { pos, tri, np } = meshOf(g);
+      const arr = new Float32Array(tri.length * 3);
+      for (let i = 0; i < tri.length; i++) {
+        const v = tri[i] * np;
+        arr[3 * i] = pos[v]; arr[3 * i + 1] = pos[v + 1]; arr[3 * i + 2] = pos[v + 2];
       }
-    }
-    return arr;
+      return arr;
+    } finally { if (temp) temp.delete(); }
   }
 
-  function exportGeom3(objects) {
-    const solids = objects.filter((o) => o.dim === 3).map((o) => o.g);
+  // todos os sólidos 3D numa malha só, pronta para o arquivo. O Manifold calcula em precisão dupla
+  // mas entrega float32 (a precisão do STL): vértices muito próximos podem virar o mesmo ponto.
+  // Aqui os vértices são juntados pelo valor exato em float32, como faz o fatiador, e triângulos
+  // que ficaram com dois cantos no mesmo ponto saem. 0 e -0 viram o mesmo número.
+  function exportMesh(objects) {
+    const solids = objects.filter((o) => o.dim === 3 && !o.g.isEmpty()).map((o) => o.g);
     if (!solids.length) return null;
-    if (solids.length === 1) return solids[0];
-    try { return J.booleans.union(solids); } catch (e) { return geom3.create([].concat(...solids.map((g) => geom3.toPolygons(g)))); }
+    const g = solids.length === 1 ? solids[0] : MF.Manifold.union(solids);
+    let m;
+    try { m = meshOf(g); } finally { if (solids.length > 1) g.delete(); }
+    const np = m.np, src = m.pos, T = m.tri;
+    const f = new Float32Array(3), bits = new Uint32Array(f.buffer);
+    const ids = new Map(), pos = [], remap = new Int32Array(src.length / np);
+    for (let v = 0; v < remap.length; v++) {
+      f[0] = src[v * np] + 0; f[1] = src[v * np + 1] + 0; f[2] = src[v * np + 2] + 0;
+      const k = bits[0] + ',' + bits[1] + ',' + bits[2];
+      let i = ids.get(k);
+      if (i === undefined) { i = pos.length / 3; ids.set(k, i); pos.push(f[0], f[1], f[2]); }
+      remap[v] = i;
+    }
+    const tri = [];
+    for (let t = 0; t < T.length; t += 3) {
+      const a = remap[T[t]], b = remap[T[t + 1]], c = remap[T[t + 2]];
+      if (a !== b && b !== c && a !== c) tri.push(a, b, c);
+    }
+    return { pos: Float32Array.from(pos), tri: Uint32Array.from(tri), np: 3 };
   }
 
   function toSTL(objects, name) {
-    const g = exportGeom3(objects);
-    if (!g) return null;
-    const tris = toTriangles({ g, dim: 3 });
-    const n = tris.length / 9;
+    const mesh = exportMesh(objects);
+    if (!mesh) return null;
+    const { pos, tri, np } = mesh;
+    const n = tri.length / 3;
     const buf = new ArrayBuffer(84 + n * 50);
     const dv = new DataView(buf);
     const header = ('Forja 3D - ' + (name || 'modelo')).slice(0, 79);
@@ -1881,30 +1906,26 @@
     dv.setUint32(80, n, true);
     let o = 84;
     for (let t = 0; t < n; t++) {
-      const b = t * 9;
-      const ax = tris[b], ay = tris[b + 1], az = tris[b + 2];
-      const ux = tris[b + 3] - ax, uy = tris[b + 4] - ay, uz = tris[b + 5] - az;
-      const vx = tris[b + 6] - ax, vy = tris[b + 7] - ay, vz = tris[b + 8] - az;
-      let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      const a = tri[3 * t] * np, b = tri[3 * t + 1] * np, c = tri[3 * t + 2] * np;
+      const ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2];
+      const vx = pos[c] - pos[a], vy = pos[c + 1] - pos[a + 1], vz = pos[c + 2] - pos[a + 2];
+      const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
       const l = Math.hypot(nx, ny, nz) || 1;
       dv.setFloat32(o, nx / l, true); dv.setFloat32(o + 4, ny / l, true); dv.setFloat32(o + 8, nz / l, true);
       o += 12;
-      for (let k = 0; k < 9; k++) { dv.setFloat32(o, tris[b + k], true); o += 4; }
+      for (const v of [a, b, c]) { dv.setFloat32(o, pos[v], true); dv.setFloat32(o + 4, pos[v + 1], true); dv.setFloat32(o + 8, pos[v + 2], true); o += 12; }
       dv.setUint16(o, 0, true); o += 2;
     }
     return buf;
   }
 
   function toOBJ(objects) {
-    const g = exportGeom3(objects);
-    if (!g) return null;
+    const mesh = exportMesh(objects);
+    if (!mesh) return null;
+    const { pos, tri, np } = mesh;
     const lines = ['# Forja 3D'];
-    let vi = 1;
-    for (const p of geom3.toPolygons(g)) {
-      for (const v of p.vertices) lines.push(`v ${+v[0].toFixed(6)} ${+v[1].toFixed(6)} ${+v[2].toFixed(6)}`);
-      lines.push('f ' + p.vertices.map((_, i) => vi + i).join(' '));
-      vi += p.vertices.length;
-    }
+    for (let i = 0; i < pos.length; i += np) lines.push(`v ${+pos[i].toFixed(6)} ${+pos[i + 1].toFixed(6)} ${+pos[i + 2].toFixed(6)}`);
+    for (let i = 0; i < tri.length; i += 3) lines.push(`f ${tri[i] + 1} ${tri[i + 1] + 1} ${tri[i + 2] + 1}`);
     return lines.join('\n') + '\n';
   }
 
@@ -1931,12 +1952,13 @@
 
   function volume(objects) {
     let v = 0;
-    for (const o of objects) if (o.dim === 3) v += J.measurements.measureVolume(o.g);
+    for (const o of objects) if (o.dim === 3) v += o.g.volume();
     return v;
   }
 
   return {
-    run, parse, lex, extractParams, literalText, toTriangles, toSTL, toOBJ, toSVG, bounds, volume, fmt,
+    run, parse, lex, extractParams, literalText, toTriangles, toSTL, toOBJ, toSVG, bounds, volume, fmt, setManifold,
+    get has3D() { return !!MF; },
     ALIASES, BUILTIN_MODS: Object.keys(BUILTIN_MODS), BUILTIN_FUNCS: Object.keys(BUILTIN_FUNCS), ScadError,
   };
 });
