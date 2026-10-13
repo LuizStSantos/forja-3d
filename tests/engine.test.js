@@ -112,6 +112,10 @@ check('font ausente avisa', 'linear_extrude(1) text("X", font="NaoExiste");', r 
   if (c.error || !c.warnings.length) { fails++; console.log('FAIL ciclo'); } else console.log('ok   ciclo de include');
 }
 check('recursão final longa', 'function f(n,a=0)= n==0?a:f(n-1,a+1); echo(f(2500));', r => eq(echo(r), ['ECHO: 2500']));
+check('centralizar na mesa', 'translate([100,50,10]) cube([20,10,4]);', r => {
+  const c = E.run('translate([100,50,10]) cube([20,10,4]);', { center: true });
+  eq(E.bounds(c.objects), [[-10, -5, 0], [10, 5, 4]]);
+});
 
 console.log(fails ? `\n${fails} FALHAS` : '\nTODOS OK');
 if (fails) process.exit(1);

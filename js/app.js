@@ -375,7 +375,7 @@
     controls.dampingFactor = 0.14;
     controls.screenSpacePanning = true;
     controls.zoomSpeed = 1.1;
-    controls.rotateSpeed = 0.9;
+    controls.rotateSpeed = 0.75;
     controls.enableZoom = false; // o zoom é feito abaixo, em direção ao cursor
     scene.add(new THREE.HemisphereLight(0xffffff, 0x77827d, 0.58));
     scene.add(new THREE.AmbientLight(0xffffff, 0.08));
@@ -391,6 +391,7 @@
     scene.add(gridGroup, modelGroup, ghostGroup);
     let edgesOn = store.get('edges', '0') === '1', gridOn = store.get('grid', '1') === '1';
     let needs = true, lastMeshes = [], gridSize = 0;
+    let mBox = new THREE.Box3(), pivotCustom = false;
 
     // gizmo dos eixos
     const gScene = new THREE.Scene();
@@ -478,6 +479,7 @@
         }
       }
       const b = boundsBox();
+      mBox = b.clone();
       const half = b.isEmpty() ? 50 : Math.max(40, Math.max(Math.abs(b.min.x), Math.abs(b.max.x), Math.abs(b.min.y), Math.abs(b.max.y)) * 1.4, (b.max.z - b.min.z) * 0.6);
       if (!gridSize || half > gridSize * 1.6 || half < gridSize / 2.5) buildGrid(half);
       needs = true;
@@ -495,27 +497,83 @@
       if (reduceMotion) { camera.position.copy(pos); controls.target.copy(target); needs = true; return; }
       anim = { p0: camera.position.clone(), t0: controls.target.clone(), p1: pos, t1: target, start: performance.now(), dur: 380 };
     }
-    const DIRS = { iso: [1, -1.3, 0.95], top: [0, -0.0001, 1], front: [0, -1, 0.0001], right: [1, 0, 0.0001] };
+    const DIRS = {
+      iso: [1, -1.3, 0.95], top: [0, -0.0001, 1], front: [0, -1, 0.0001], right: [1, 0, 0.0001],
+      bottom: [0, -0.0001, -1], back: [0, 1, 0.0001], left: [-1, 0, 0.0001],
+    };
+    const OPPOSITE = { top: 'bottom', front: 'back', right: 'left', bottom: 'top', back: 'front', left: 'right' };
     let lastDir = 'iso';
+    // distância mínima para a caixa da peça caber inteira na tela olhando por esta direção
+    function fitDistance(box, dir) {
+      const c = box.getCenter(new THREE.Vector3());
+      const fwd = dir.clone().negate();
+      const right = new THREE.Vector3().crossVectors(fwd, camera.up).normalize();
+      if (right.lengthSq() < 1e-8) right.set(1, 0, 0);
+      const up = new THREE.Vector3().crossVectors(right, fwd).normalize();
+      const tv = Math.tan((camera.fov * Math.PI) / 360), th = tv * camera.aspect;
+      let d = 0;
+      for (let i = 0; i < 8; i++) {
+        const q = new THREE.Vector3(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z).sub(c);
+        const depth = -q.dot(fwd); // positivo = mais perto da câmera
+        d = Math.max(d, depth + Math.max(Math.abs(q.dot(right)) / th, Math.abs(q.dot(up)) / tv));
+      }
+      return d;
+    }
     function fit(dirName, animate = true) {
-      if (dirName) lastDir = dirName;
+      if (dirName) {
+        // apertar de novo a mesma vista mostra o lado oposto (frente → trás, topo → baixo, lado → outro lado)
+        if (dirName === lastDir && OPPOSITE[dirName] && animate) {
+          const cur = camera.position.clone().sub(controls.target).normalize();
+          if (cur.dot(new THREE.Vector3(...DIRS[dirName]).normalize()) > 0.98) dirName = OPPOSITE[dirName];
+        }
+        lastDir = dirName;
+      }
+      pivotCustom = false;
       const box = boundsBox();
       if (box.isEmpty()) box.set(new THREE.Vector3(-20, -20, 0), new THREE.Vector3(20, 20, 20));
-      const sphere = box.getBoundingSphere(new THREE.Sphere());
-      const r = Math.max(sphere.radius, 1);
-      const vfov = (camera.fov * Math.PI) / 180;
-      const hfov = 2 * Math.atan(Math.tan(vfov / 2) * camera.aspect);
-      const dist = (r / Math.sin(Math.min(vfov, hfov) / 2)) * 1.06;
       let dir;
       if (dirName) dir = new THREE.Vector3(...DIRS[dirName]).normalize();
       else dir = camera.position.clone().sub(controls.target).normalize();
-      const target = sphere.center.clone();
+      const dist = Math.max(fitDistance(box, dir) * 1.18, 1);
+      const target = box.getCenter(new THREE.Vector3());
       const pos = target.clone().add(dir.multiplyScalar(dist));
-      camera.near = Math.max(dist / 200, 0.01);
-      camera.far = dist * 200;
-      camera.updateProjectionMatrix();
       if (animate) moveCamera(pos, target);
       else { camera.position.copy(pos); controls.target.copy(target); needs = true; }
+    }
+    // planos de corte seguem a peça: nem cortam ao chegar perto, nem perdem precisão de longe
+    function updateClip() {
+      const sph = mBox.isEmpty() ? null : mBox.getBoundingSphere(new THREE.Sphere());
+      const c = sph ? sph.center : controls.target, r = sph ? Math.max(sph.radius, 1) : 50;
+      const d = camera.position.distanceTo(c);
+      const near = Math.max(Math.min(d - r * 1.2, d * 0.5), 0.02) * 0.5 + 0.01;
+      const far = Math.max(d + r * 3, gridSize * 8, 1000);
+      if (Math.abs(camera.near - near) > near * 0.02 || Math.abs(camera.far - far) > far * 0.02) { camera.near = near; camera.far = far; camera.updateProjectionMatrix(); needs = true; }
+    }
+    // gira em volta do ponto de foco (graus)
+    function orbitBy(dTheta, dPhi) {
+      anim = null;
+      const off = camera.position.clone().sub(controls.target);
+      const sp = new THREE.Spherical().setFromVector3(new THREE.Vector3(off.x, off.z, -off.y)); // eixo Y do three = Z daqui
+      sp.theta -= (dTheta * Math.PI) / 180;
+      sp.phi = Math.min(Math.max(sp.phi - (dPhi * Math.PI) / 180, 0.01), Math.PI - 0.01);
+      const v = new THREE.Vector3().setFromSpherical(sp);
+      camera.position.set(controls.target.x + v.x, controls.target.y - v.z, controls.target.z + v.y);
+      needs = true;
+    }
+    function panBy(dx, dy) {
+      anim = null;
+      const dist = camera.position.distanceTo(controls.target);
+      const k = (dist * Math.tan((camera.fov * Math.PI) / 360) * 2) / Math.max(canvas.clientHeight, 1);
+      const right = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 0), up = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 1);
+      const d = right.multiplyScalar(-dx * k).add(up.multiplyScalar(dy * k));
+      camera.position.add(d); controls.target.add(d); needs = true;
+    }
+    function zoomBy(f) {
+      anim = null;
+      const dist = camera.position.distanceTo(controls.target);
+      const nd = Math.min(Math.max(dist * f, 0.2), camera.far / 4);
+      camera.position.sub(controls.target).setLength(nd).add(controls.target);
+      needs = true;
     }
 
     function resize() {
@@ -561,6 +619,7 @@
         if (t >= 1) anim = null;
       }
       controls.update();
+      updateClip();
       if (needs) { needs = false; draw(); }
     }
     requestAnimationFrame(loop);
@@ -634,6 +693,12 @@
       const p = pointUnder(e.clientX, e.clientY);
       camera.position.sub(p).multiplyScalar(f).add(p);
       controls.target.sub(p).multiplyScalar(f).add(p);
+      if (!pivotCustom && !mBox.isEmpty()) {
+        // o foco do giro volta para a linha de visada, na profundidade da peça (a peça não "foge" ao girar)
+        const fwd = controls.target.clone().sub(camera.position).normalize();
+        const t = mBox.getCenter(new THREE.Vector3()).sub(camera.position).dot(fwd);
+        if (t > 0.05) controls.target.copy(camera.position).addScaledVector(fwd, t);
+      }
       needs = true;
     }, { passive: false });
     // duplo clique: gira em torno do ponto tocado; no vazio, enquadra a peça
@@ -641,7 +706,7 @@
       ndc.set(((e.clientX - canvas.getBoundingClientRect().left) / canvas.clientWidth) * 2 - 1, -((e.clientY - canvas.getBoundingClientRect().top) / canvas.clientHeight) * 2 + 1);
       ray.setFromCamera(ndc, camera);
       const h = ray.intersectObjects(modelGroup.children.filter((c) => c.isMesh), false)[0];
-      if (h) moveCamera(camera.position.clone().add(h.point.clone().sub(controls.target)), h.point.clone());
+      if (h) { pivotCustom = true; moveCamera(camera.position.clone().add(h.point.clone().sub(controls.target)), h.point.clone()); }
       else fit(null);
     });
 
@@ -652,7 +717,7 @@
 
     resize();
     buildGrid(50);
-    return { setMeshes, fit, resize, hideHint() { const h = $('#navhint'); if (h) h.hidden = true; }, setEdges, setGrid, applyTheme, snapshot, get edges() { return edgesOn; }, get grid() { return gridOn; }, redraw() { needs = true; } };
+    return { setMeshes, fit, resize, orbitBy, panBy, zoomBy, hideHint() { const h = $('#navhint'); if (h) h.hidden = true; }, setEdges, setGrid, applyTheme, snapshot, get edges() { return edgesOn; }, get grid() { return gridOn; }, redraw() { needs = true; } };
   })();
 
   // ───────── fontes e bibliotecas (recursos do usuário) ─────────
@@ -1513,6 +1578,13 @@ tampa = true;</pre></div>`;
     const t = e.target;
     if (t && (t.closest('.CodeMirror') || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable)) return;
     const k = e.key.toLowerCase();
+    const arrows = { arrowleft: [-1, 0], arrowright: [1, 0], arrowup: [0, 1], arrowdown: [0, -1] };
+    if (arrows[k] && !e.target.closest('.menu, .dpanel, .tray, .dtabs')) {
+      const [ax, ay] = arrows[k];
+      if (e.shiftKey) viewer.panBy(ax * 40, ay * 40); else viewer.orbitBy(ax * 12, ay * 12);
+      e.preventDefault(); return;
+    }
+    if (k === '+' || k === '=' || k === '-' || k === '_') { viewer.zoomBy(k === '+' || k === '=' ? 0.85 : 1.18); e.preventDefault(); return; }
     const views = { '1': 'iso', '2': 'top', '3': 'front', '4': 'right' };
     if (views[k]) viewer.fit(views[k]);
     else if (k === 'f') viewer.fit(null);
