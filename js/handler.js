@@ -4,10 +4,10 @@
   function forjaHandler(E, timeLimit) {
     let last = null;
     // o resultado anterior guarda geometria na memória do WebAssembly: libera antes de calcular outro
-    function runCode(code, libs) {
+    function runCode(code, libs, center) {
       if (last) { last.r.dispose(); last = null; }
-      const r = E.run(code, { timeLimit, libs: libs || {} });
-      last = { code, lk: JSON.stringify(libs || {}), r };
+      const r = E.run(code, { timeLimit, libs: libs || {}, center: !!center });
+      last = { code, lk: JSON.stringify(libs || {}) + (center ? 'C' : ''), r };
       return r;
     }
     function useFonts(list) { (list || []).forEach((f) => E.setFont(f.family, f.style, f.data)); }
@@ -15,7 +15,7 @@
       if (m.type === 'hello') return { reply: { type: 'hello' }, transfer: [] };
       if (m.type === 'run') {
         useFonts(m.fonts);
-        const r = runCode(m.code, m.libs);
+        const r = runCode(m.code, m.libs, m.center);
         const meshes = [], transfer = [];
         const add = (o, ghost) => {
           try { const pos = E.toTriangles(o, 1); meshes.push({ pos, color: o.color, line: o.line, dim: o.dim, ghost }); transfer.push(pos.buffer); } catch (e) { /* ignora */ }
@@ -35,7 +35,7 @@
       }
       if (m.type === 'export') {
         useFonts(m.fonts);
-        const r = last && last.code === m.code && last.lk === JSON.stringify(m.libs || {}) ? last.r : runCode(m.code, m.libs);
+        const r = last && last.code === m.code && last.lk === JSON.stringify(m.libs || {}) + (m.center ? 'C' : '') ? last.r : runCode(m.code, m.libs, m.center);
         const fail = (msg) => ({ reply: { type: 'export', id: m.id, error: msg }, transfer: [] });
         if (r.error) return fail(`O código tem um erro${r.error.line ? ' na linha ' + r.error.line : ''}. Corrija antes de exportar.`);
         if (m.format === 'stl' || m.format === 'obj') {

@@ -101,16 +101,18 @@
         <canvas id="view"></canvas>
         <div class="readout" id="readout" hidden><div class="dims"></div><div class="mass"></div></div>
         <div class="viewtools">
-          <button class="vt" data-view="fit" title="Enquadrar a peça"><svg class="i" viewBox="0 0 20 20"><path d="M3 7V3h4M13 3h4v4M17 13v4h-4M7 17H3v-4"/></svg></button>
-          <button class="vt" data-view="iso" title="Vista isométrica">Iso</button>
-          <button class="vt" data-view="top" title="Vista de cima">Topo</button>
-          <button class="vt" data-view="front" title="Vista de frente">Frente</button>
-          <button class="vt" data-view="right" title="Vista da direita">Lado</button>
-          <button class="vt" data-toggle="edges" aria-pressed="false" title="Mostrar arestas"><svg class="i" viewBox="0 0 20 20"><path d="M10 2.5 17 6.5v7L10 17.5 3 13.5v-7z M3 6.5l7 4 7-4 M10 10.5v7"/></svg></button>
-          <button class="vt" data-toggle="grid" aria-pressed="true" title="Mostrar grade e eixos"><svg class="i" viewBox="0 0 20 20"><path d="M3 7h14M3 13h14M7 3v14M13 3v14"/></svg></button>
+          <button class="vt" data-view="fit" title="Enquadrar a peça (F)"><svg class="i" viewBox="0 0 20 20"><path d="M3 7V3h4M13 3h4v4M17 13v4h-4M7 17H3v-4"/></svg></button>
+          <button class="vt" data-view="iso" title="Vista isométrica (1)">Iso</button>
+          <button class="vt" data-view="top" title="Vista de cima (2)">Topo</button>
+          <button class="vt" data-view="front" title="Vista de frente (3)">Frente</button>
+          <button class="vt" data-view="right" title="Vista da direita (4)">Lado</button>
+          <button class="vt" data-toggle="center" aria-pressed="false" title="Centralizar a peça no meio da mesa (C)"><svg class="i" viewBox="0 0 20 20"><circle cx="10" cy="10" r="3"/><path d="M10 2v3.5M10 14.5V18M2 10h3.5M14.5 10H18"/></svg><span class="vtl">Centro</span></button>
+          <button class="vt" data-toggle="edges" aria-pressed="false" title="Mostrar arestas (E)"><svg class="i" viewBox="0 0 20 20"><path d="M10 2.5 17 6.5v7L10 17.5 3 13.5v-7z M3 6.5l7 4 7-4 M10 10.5v7"/></svg></button>
+          <button class="vt" data-toggle="grid" aria-pressed="true" title="Mostrar grade e eixos (G)"><svg class="i" viewBox="0 0 20 20"><path d="M3 7h14M3 13h14M7 3v14M13 3v14"/></svg></button>
         </div>
         <div class="empty" id="empty" hidden><div><b>A bancada está vazia</b>Escreva <code>cube(10);</code> no editor ou escolha uma forma na bandeja.</div></div>
         <div class="pick-tip" id="pickTip" hidden></div>
+        <div class="navhint" id="navhint"><span>Arraste: girar</span><span>Shift ou botão direito: mover</span><span>Roda: zoom</span><span>Duplo clique: focar</span></div>
         <div class="busy" id="busy" hidden><span>Renderizando…</span><button id="btnStop" type="button">Parar</button></div>
         <button class="errbar" id="errbar" type="button" hidden><b></b><span></span></button>
       </div>

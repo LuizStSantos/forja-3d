@@ -375,6 +375,8 @@
     controls.dampingFactor = 0.14;
     controls.screenSpacePanning = true;
     controls.zoomSpeed = 1.1;
+    controls.rotateSpeed = 0.9;
+    controls.enableZoom = false; // o zoom é feito abaixo, em direção ao cursor
     scene.add(new THREE.HemisphereLight(0xffffff, 0x77827d, 0.58));
     scene.add(new THREE.AmbientLight(0xffffff, 0.08));
     const key = new THREE.DirectionalLight(0xffffff, 0.78);
@@ -606,7 +608,42 @@
       hoverRaf = requestAnimationFrame(() => { hoverRaf = 0; setHover(pickAt(e.clientX, e.clientY), e); });
     });
     canvas.addEventListener('pointerleave', () => setHover(null));
-    canvas.addEventListener('dblclick', () => fit(null));
+    // zoom em direção ao ponto sob o cursor (roda do mouse ou pinça do touchpad)
+    const GROUND = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+    function pointUnder(x, y) {
+      const r = canvas.getBoundingClientRect();
+      ndc.set(((x - r.left) / r.width) * 2 - 1, -((y - r.top) / r.height) * 2 + 1);
+      ray.setFromCamera(ndc, camera);
+      const hit = ray.intersectObjects(modelGroup.children.filter((c) => c.isMesh), false)[0];
+      if (hit) return hit.point.clone();
+      const dist = camera.position.distanceTo(controls.target);
+      const g = ray.ray.intersectPlane(GROUND, new THREE.Vector3());
+      if (g && g.distanceTo(camera.position) < dist * 8) return g;
+      return ray.ray.at(dist, new THREE.Vector3());
+    }
+    canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      anim = null;
+      let dy = e.deltaY;
+      if (e.deltaMode === 1) dy *= 16; else if (e.deltaMode === 2) dy *= 120;
+      if (e.ctrlKey) dy *= 3; // pinça no touchpad
+      let f = Math.exp(Math.max(-120, Math.min(120, dy)) * 0.0012 * controls.zoomSpeed);
+      const dist = camera.position.distanceTo(controls.target);
+      const minD = 0.2, maxD = camera.far / 4;
+      f = Math.min(Math.max(f, minD / dist), maxD / dist);
+      const p = pointUnder(e.clientX, e.clientY);
+      camera.position.sub(p).multiplyScalar(f).add(p);
+      controls.target.sub(p).multiplyScalar(f).add(p);
+      needs = true;
+    }, { passive: false });
+    // duplo clique: gira em torno do ponto tocado; no vazio, enquadra a peça
+    canvas.addEventListener('dblclick', (e) => {
+      ndc.set(((e.clientX - canvas.getBoundingClientRect().left) / canvas.clientWidth) * 2 - 1, -((e.clientY - canvas.getBoundingClientRect().top) / canvas.clientHeight) * 2 + 1);
+      ray.setFromCamera(ndc, camera);
+      const h = ray.intersectObjects(modelGroup.children.filter((c) => c.isMesh), false)[0];
+      if (h) moveCamera(camera.position.clone().add(h.point.clone().sub(controls.target)), h.point.clone());
+      else fit(null);
+    });
 
     function setEdges(on) { edgesOn = on; store.set('edges', on ? '1' : '0'); setMeshes(lastMeshes); }
     function setGrid(on) { gridOn = on; store.set('grid', on ? '1' : '0'); gridGroup.visible = on; needs = true; }
@@ -615,7 +652,7 @@
 
     resize();
     buildGrid(50);
-    return { setMeshes, fit, resize, setEdges, setGrid, applyTheme, snapshot, get edges() { return edgesOn; }, get grid() { return gridOn; }, redraw() { needs = true; } };
+    return { setMeshes, fit, resize, hideHint() { const h = $('#navhint'); if (h) h.hidden = true; }, setEdges, setGrid, applyTheme, snapshot, get edges() { return edgesOn; }, get grid() { return gridOn; }, redraw() { needs = true; } };
   })();
 
   // ───────── fontes e bibliotecas (recursos do usuário) ─────────
@@ -748,7 +785,7 @@
         });
     },
     send(m) {
-      if (m.type === 'run' || m.type === 'export') Object.assign(m, res.payload());
+      if (m.type === 'run' || m.type === 'export') { Object.assign(m, res.payload()); m.center = centerOn; }
       if (this.mode === 'worker') { this.w.postMessage(m); return; }
       setTimeout(() => {
         let o;
@@ -829,6 +866,7 @@
   const statusEl = $('#status');
   function setStatus(s, text) { statusEl.dataset.s = s; statusEl.querySelector('span').textContent = text; }
   const fmtMs = (ms) => (ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`);
+  let centerOn = store.get('center', '0') === '1';
   let fitNext = true, busyT = 0, busyTick = 0, lastResult = null, lastGood = null;
   function stopBusy() { clearTimeout(busyT); clearInterval(busyTick); $('#busy').hidden = true; }
 
@@ -891,22 +929,16 @@
     if (!m.bounds) { ro.hidden = true; return; }
     const [a, b] = m.bounds;
     const f = (v) => (Math.abs(v) >= 1000 ? v.toFixed(0) : v.toFixed(2));
-    const dims = ro.querySelector('.dims');
-    dims.innerHTML = '';
     const axes = m.has3d ? ['X', 'Y', 'Z'] : ['X', 'Y'];
-    axes.forEach((ax, i) => {
-      const s = document.createElement('span');
-      s.innerHTML = `<em>${ax}</em>`;
-      s.appendChild(document.createTextNode(f(b[i] - a[i])));
-      dims.appendChild(s);
-    });
-    const u = document.createElement('span'); u.textContent = 'mm'; u.style.opacity = '.55'; dims.appendChild(u);
+    ro.querySelector('.dims').innerHTML = axes.map((ax, i) => `<div class="dim" data-ax="${ax}"><em>${ax}</em><b>${f(b[i] - a[i])}</b></div>`).join('') + '<span class="unit">mm</span>';
     const mass = ro.querySelector('.mass');
     if (m.has3d && m.volume > 0) {
-      const cm3 = m.volume / 1000;
-      mass.textContent = `${cm3 < 10 ? cm3.toFixed(2) : cm3.toFixed(1)} cm³ · maciço`;
+      const cm3 = m.volume / 1000, g = cm3 * 1.24;
+      mass.innerHTML = `<span class="stat"><b>${cm3 < 10 ? cm3.toFixed(2) : cm3.toFixed(1)}</b> cm³</span>` +
+        `<span class="stat"><b>≈ ${g < 10 ? g.toFixed(1) : Math.round(g)}</b> g</span><span class="tag">maciço</span>`;
+      mass.title = 'Peso estimado com densidade de 1,24 g/cm³ (PLA), considerando a peça toda maciça (100% de preenchimento).';
       mass.hidden = false;
-    } else if (m.has2d && !m.has3d) { mass.textContent = 'Formas 2D: exporte em SVG ou use linear_extrude()'; mass.hidden = false; }
+    } else if (m.has2d && !m.has3d) { mass.innerHTML = '<span class="note">Formas 2D: exporte em SVG ou use linear_extrude()</span>'; mass.title = ''; mass.hidden = false; }
     else mass.hidden = true;
     ro.hidden = false;
   }
@@ -1459,11 +1491,39 @@ tampa = true;</pre></div>`;
   autoEl.addEventListener('change', () => { store.set('auto', autoEl.checked ? '1' : '0'); if (autoEl.checked) renderNow(); });
   projName.addEventListener('input', () => store.set('name', projName.value));
 
+  const tCenter = $('.vt[data-toggle="center"]');
+  tCenter.setAttribute('aria-pressed', String(centerOn));
+  function setCenter(on) {
+    centerOn = on;
+    store.set('center', on ? '1' : '0');
+    tCenter.setAttribute('aria-pressed', String(on));
+    fitNext = true;
+    renderNow();
+    toast(on ? 'Peça centralizada no meio da mesa (também no STL exportado)' : 'Posição original da peça');
+  }
+  tCenter.addEventListener('click', () => setCenter(!centerOn));
   $$('.vt[data-view]').forEach((b) => b.addEventListener('click', () => viewer.fit(b.dataset.view === 'fit' ? null : b.dataset.view)));
   const tEdges = $('.vt[data-toggle="edges"]'), tGrid = $('.vt[data-toggle="grid"]');
   tEdges.setAttribute('aria-pressed', String(viewer.edges));
   tGrid.setAttribute('aria-pressed', String(viewer.grid));
   tEdges.addEventListener('click', () => { const on = tEdges.getAttribute('aria-pressed') !== 'true'; tEdges.setAttribute('aria-pressed', String(on)); viewer.setEdges(on); });
+  // atalhos do teclado para a visualização (fora do editor e dos campos de texto)
+  document.addEventListener('keydown', (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const t = e.target;
+    if (t && (t.closest('.CodeMirror') || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable)) return;
+    const k = e.key.toLowerCase();
+    const views = { '1': 'iso', '2': 'top', '3': 'front', '4': 'right' };
+    if (views[k]) viewer.fit(views[k]);
+    else if (k === 'f') viewer.fit(null);
+    else if (k === 'c') setCenter(!centerOn);
+    else if (k === 'g') tGrid.click();
+    else if (k === 'e') tEdges.click();
+    else return;
+    e.preventDefault();
+  });
+  ['pointerdown', 'wheel'].forEach((ev) => $('#view').addEventListener(ev, () => { viewer.hideHint(); store.set('hint', '1'); }, { passive: true }));
+  if (store.get('hint', '0') === '1') viewer.hideHint();
   tGrid.addEventListener('click', () => { const on = tGrid.getAttribute('aria-pressed') !== 'true'; tGrid.setAttribute('aria-pressed', String(on)); viewer.setGrid(on); });
 
   // ───────── alterações no código ─────────

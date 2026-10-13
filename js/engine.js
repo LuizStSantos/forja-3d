@@ -1972,7 +1972,17 @@
       top.vars.set('$preview', true); top.vars.set('$children', 0);
       top.vars.set('$vpr', [55, 0, 25]); top.vars.set('$vpt', [0, 0, 0]); top.vars.set('$vpd', 140); top.vars.set('$vpf', 22.5);
       const lists = it.runBlock(ast.body, top);
-      const out = it.root || merge(lists);
+      let out = it.root || merge(lists);
+      if (opts.center) {
+        // centraliza na mesa: meio da peça em X e Y no zero, a base apoiada em Z = 0
+        const live = out.solids.filter((x) => !isEmptyGeom(x));
+        const b = bounds(live.length ? live : out.ghosts.filter((x) => !isEmptyGeom(x)));
+        if (b) {
+          const has3 = live.some((x) => x.dim === 3);
+          const dx = -(b[0][0] + b[1][0]) / 2, dy = -(b[0][1] + b[1][1]) / 2, dz = has3 ? -b[0][2] : 0;
+          if (dx || dy || dz) out = applyMatrix(out, Tm(dx, dy, dz));
+        }
+      }
       result.objects = out.solids.filter((o) => !isEmptyGeom(o));
       result.ghosts = out.ghosts.filter((o) => !isEmptyGeom(o));
     } catch (e) {
